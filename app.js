@@ -3,7 +3,7 @@
    Identificação do poste por posição + rumo (não por imagem).
    Funciona offline. Dados em IndexedDB. Exporta ZIP para o dossiê. */
 'use strict';
-const VERSAO = 'v0.8';
+const VERSAO = 'v0.9';
 
 /* ---------- 1. Persistência ---------- */
 const DB_NOME = 'invpostes', DB_VER = 1;
@@ -1017,9 +1017,42 @@ function zip(arquivos){ // [{nome, dados:Uint8Array}]
   return new Blob([...locais, ...centrais, eo], { type:'application/zip' });
 }
 
+/* ---------- KMZ validado: é o que alimenta o build_dxf.py ----------
+   Diferente do KMZ inicial do painel, que é backup do projeto antes do campo. */
+const xe = s => String(s==null?'':s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function postesValidados(){
+  return postes.filter(p => { const r = regs[p.barramento];
+    return r && (r.status==='ok' || r.status==='divergente'); });
+}
+function montarKmlValidado(){
+  const us = postesValidados();
+  const marcas = us.map((p,i) => {
+    const r = regs[p.barramento] || {};
+    return '<Placemark><name>' + xe(String(i+1).padStart(2,'0')) + '</name><description>'
+      + xe('Barramento: ' + p.barramento
+           + '\nLatitude: ' + p.lat.toFixed(7) + '\nLongitude: ' + p.lon.toFixed(7)
+           + (p.cod_id ? '\nCOD_ID BDGD: ' + p.cod_id : '')
+           + (r.ocupantes_campo!=null ? '\nOcupantes em campo: ' + r.ocupantes_campo : '')
+           + (p.logradouro ? '\nLogradouro: ' + p.logradouro : '')
+           + (p.novo ? '\nNAO CADASTRADO NO GEOSWEB' : p.fora_da_os ? '\nFORA DA OS — incluir no GEOSWEB' : ''))
+      + '</description><styleUrl>#poste</styleUrl><Point><coordinates>'
+      + p.lon.toFixed(7) + ',' + p.lat.toFixed(7) + ',0</coordinates></Point></Placemark>';
+  }).join('');
+  return '<?xml version="1.0" encoding="UTF-8"?>\n'
+    + '<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>'
+    + xe((cfg.os||'projeto') + ' — rota validada em campo') + '</name>'
+    + '<Style id="poste"><IconStyle><scale>0.9</scale><Icon><href>'
+    + 'http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle></Style>'
+    + '<Style id="rota"><LineStyle><color>ff2e8b0f</color><width>3</width></LineStyle></Style>'
+    + '<Folder><name>Postes</name>' + marcas + '</Folder>'
+    + '<Placemark><name>ACESSO</name><styleUrl>#rota</styleUrl><LineString><tessellate>1</tessellate>'
+    + '<coordinates>' + us.map(p => p.lon.toFixed(7)+','+p.lat.toFixed(7)+',0').join(' ')
+    + '</coordinates></LineString></Placemark></Document></kml>';
+}
+
 /* ---------- 14. Exportação ---------- */
 function csvInventario(){
-  const cab = ['ID','BARRAMENTO','COD_ID','ORIGEM','OCUPACAO_PRODEPA','LAT_BASE','LON_BASE','STATUS','OCUP_GEOSWEB','OCUP_CAMPO',
+  const cab = ['ID','BARRAMENTO','COD_ID','ORIGEM','OCUPACAO_PRODEPA','LOGRADOURO','LAT_BASE','LON_BASE','STATUS','OCUP_GEOSWEB','OCUP_CAMPO',
     'DIVERGENCIA','FOTO_ABERTA','FOTO_DETALHE','NITIDEZ_A','NITIDEZ_D','AZIMUTE_A','LAT_GPS','LON_GPS',
     'PRECISAO_GPS_M','RANKING','DIST_M','DESVIO_RUMO','BUSSOLA_OFF','MOTIVO_DESCARTE','DATA_HORA','OBS'];
   const lin = postes.map(p => {
@@ -1028,6 +1061,7 @@ function csvInventario(){
     return [
       p.seq!=null?p.seq:'', p.barramento, p.cod_id||'',
       p.novo?'NAO_CADASTRADO':(p.fora_da_os?'BDGD_FORA_DA_OS':'GEOSWEB'), p.ocupacao_prodepa?'TEM':'SEM',
+      (p.logradouro||'').replace(/;/g,','),
       virg(p.lat,7), virg(p.lon,7),
       r.status || 'pendente',
       p.ocupantes!=null?p.ocupantes:'', r.ocupantes_campo!=null?r.ocupantes_campo:'',
@@ -1059,6 +1093,7 @@ function baixar(blob, nome){
   a.href = u; a.download = nome; document.body.appendChild(a); a.click();
   setTimeout(()=>{ a.remove(); URL.revokeObjectURL(u); }, 1500);
 }
+function nomeBase(){ return limpaNome(cfg.os||'SEM-OS'); }
 function nomePacote(){
   return limpaNome((cfg.os||'SEM-OS') + '_' + (cfg.projeto||'INVENTARIO')) + '_' + agora().slice(0,10);
 }
@@ -1077,6 +1112,8 @@ async function gerarZip(){
     }
   }
   arqs.push({ nome:'inventario.csv', dados:enc.encode(csvInventario()) });
+  if (postesValidados().length)
+    arqs.push({ nome: nomeBase()+'_VALIDADO.kml', dados:enc.encode(montarKmlValidado()) });
   arqs.push({ nome:'ranking.csv', dados:enc.encode(csvRanking()) });
   arqs.push({ nome:'inventario.json', dados:enc.encode(JSON.stringify({
     gerado_em: agora(), app:'inventario-postes v0', cfg, postes, registros: regs }, null, 1)) });
@@ -1242,6 +1279,11 @@ async function iniciar(){
   };
   $('#btnZip').onclick = gerarZip;
   $('#btnCsvSo').onclick = () => baixar(new Blob([csvInventario()],{type:'text/csv;charset=utf-8'}), nomePacote()+'.csv');
+  $('#btnKmzVal').onclick = () => {
+    if (!postesValidados().length) return toast('Nenhum poste validado ainda');
+    baixar(zip([{nome:'doc.kml', dados:new TextEncoder().encode(montarKmlValidado())}]),
+           nomeBase()+'_VALIDADO.kmz');
+  };
   $('#btnZerar').onclick = async () => {
     if (!confirm('Zerar TODOS os registros e fotos deste aparelho? Exporte antes.')) return;
     regs = {}; await kvSet('regs', regs); await fotosLimpar();

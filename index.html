@@ -286,9 +286,10 @@ textarea{min-height:60px;resize:vertical}
   </div>
   <div class="card">
     <h2>Pacote de entrega</h2>
-    <p class="mini" style="margin-top:0">ZIP com as fotos nomeadas no padrão do dossiê, mais <code>inventario.csv</code>, <code>inventario.json</code> e <code>ranking.csv</code>.</p>
+    <p class="mini" style="margin-top:0">ZIP com as fotos nomeadas no padrão do dossiê, mais <code>inventario.csv</code>, <code>inventario.json</code>, <code>ranking.csv</code> e o <b>KML da rota validada</b>, que é o que alimenta o <code>build_dxf.py</code>.</p>
     <button class="btn" id="btnZip">Gerar ZIP do inventário</button>
     <div class="linha-btn">
+      <button class="btn sec pequeno" id="btnKmzVal" style="flex:1">KMZ validado</button>
       <button class="btn sec pequeno" id="btnCsvSo" style="flex:1">Só o CSV</button>
       <button class="btn perigo pequeno" id="btnZerar" style="flex:1">Zerar registros</button>
     </div>
