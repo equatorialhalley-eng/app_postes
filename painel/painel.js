@@ -3,7 +3,7 @@
    Saída: pacote do app de campo, KMZ inicial de backup, e — na volta —
    as três listas que o projetista precisa executar no GEOSWEB. */
 'use strict';
-const VERSAO = 'v0.3';
+const VERSAO = 'v0.4';
 
 /* ---------- utilidades ---------- */
 const $ = s => document.querySelector(s);
@@ -161,12 +161,36 @@ function lerPlanilha(buf, nomeArquivo){
     irregularidades:Array.from(p.irregularidades).join(' · '),
     ocupacao_prodepa:p.prodepa, servicos:String(p.servicos||''), origem:'GEOSWEB'
   }));
-  // dedupe geométrico < 1 m (R14)
+  // pares muito próximos (R14). Duas faixas, porque significam coisas diferentes:
+  // < 0,5 m  -> não existem dois postes tão perto: duplicidade de cadastro do GEOSWEB
+  // 0,5 a 2 m -> pode ser poste duplo real; só o campo decide. Nunca descartar sozinho.
+  // Medido no lote de 08/11/2026: São Raimundo tinha um par a 0,15 m (o projetista
+  // descartou um na mão) e Altamira tem um par a 1,54 m que ficou nos dois.
   const fora = [];
-  for (let i=0;i<lista.length;i++) for (let j=i+1;j<lista.length;j++)
-    if (distM(lista[i], lista[j]) < 1) fora.push([lista[i].barramento, lista[j].barramento]);
+  for (let i=0;i<lista.length;i++) for (let j=i+1;j<lista.length;j++){
+    const d = distM(lista[i], lista[j]);
+    if (d < 2) fora.push({ a:lista[i].barramento, b:lista[j].barramento, d:d,
+                           grau: d < 0.5 ? 'duplicidade' : 'conferir' });
+  }
+  fora.sort((x,y) => x.d - y.d);
   const os = (nomeArquivo.match(/(\d{4}\.\d{2}\.\d{10,})/) || [])[1] || '';
   return { os, tipoOS:tipoCompleto(nomeAba), postes:lista, linhas:limpas.length-1, coincidentes:fora };
+}
+
+/* ---------- aviso de postes muito próximos ---------- */
+function avisarProximos(pares){
+  const dup = pares.filter(p => p.grau === 'duplicidade');
+  const chk = pares.filter(p => p.grau === 'conferir');
+  const linha = p => esc(p.a) + ' e ' + esc(p.b) + ' — ' + p.d.toFixed(2).replace('.', ',') + ' m';
+  let h = '';
+  if (dup.length) h += '<div class="aviso erro"><b>Duplicidade de cadastro — ' + dup.length
+    + ' par(es) a menos de 0,5 m</b><br>' + dup.map(linha).join('<br>')
+    + '<br><i>Não existem dois postes tão próximos. Confirme qual barramento vale e tire o outro da seleção no GEOSWEB.</i></div>';
+  if (chk.length) h += '<div class="aviso alerta"><b>Conferir em campo — ' + chk.length
+    + ' par(es) entre 0,5 e 2 m</b><br>' + chk.map(linha).join('<br>')
+    + '<br><i>Pode ser poste duplo real ou duplicidade. O colaborador resolve no local.</i></div>';
+  const alvo = $('#proximos');
+  if (alvo) alvo.innerHTML = h; else toast(pares.length + ' par(es) de postes a menos de 2 m — veja o painel', 7000);
 }
 
 /* ---------- recorte do município ---------- */
@@ -648,7 +672,8 @@ window.addEventListener('DOMContentLoaded', () => {
       const r = lerPlanilha(await f.arrayBuffer(), f.name);
       OS = r.os; tipoOS = r.tipoOS; postes = r.postes;
       marcar('#sXlsx', f.name, r.postes.length + ' postes · ' + r.linhas + ' linhas · <b>' + esc(r.tipoOS) + '</b>'
-        + (r.coincidentes.length ? ' · <span style="color:var(--erro)">'+r.coincidentes.length+' par(es) coincidente(s) &lt; 1 m</span>' : ''));
+        + (r.coincidentes.length ? ' · <span style="color:var(--erro)">'+r.coincidentes.length+' par(es) a menos de 2 m</span>' : ''));
+      if (r.coincidentes.length) avisarProximos(r.coincidentes);
       processar();
       toast(postes.length + ' postes lidos');
     }catch(e){ console.error(e); toast('Falha: ' + e.message, 6000); }
