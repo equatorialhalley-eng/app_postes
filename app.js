@@ -673,8 +673,12 @@ async function importarArquivo(file){
   setTimeout(desenharMapa, 80);
 }
 function pacoteDemo(){
-  // corredor sintético em Belém (DEMONSTRAÇÃO — não é dado da Equatorial)
-  const base = { lat:-1.45215, lon:-48.49015 };
+  // corredor sintético para teste de caminhada (DEMONSTRAÇÃO — não é dado da Equatorial).
+  // Nasce em volta da posição atual, para o teste funcionar em qualquer lugar;
+  // sem GPS ainda, cai num ponto de Belém.
+  const base = pos
+    ? desloca(pos.coords.latitude, pos.coords.longitude, -40, 0)
+    : { lat:-1.45215, lon:-48.49015 };
   const out = [];
   for (let i=0;i<14;i++){
     const lado = i%2 ? 1 : -1;
@@ -908,11 +912,12 @@ async function iniciar(){
     catch(err){ console.error(err); $('#infoBase').innerHTML = '<span style="color:var(--erro)">'+esc(err.message)+'</span>'; toast('Importação falhou'); }
   };
   $('#btnDemo').onclick = async () => {
+    if (!pos){ toast('Aguardando o GPS para posicionar os postes de teste…', 3000); return; }
     postes = pacoteDemo(); await kvSet('postes', postes);
     if (!cfg.os){ cfg.os='2026.01.054880000000'; cfg.projeto='DEMONSTRAÇÃO'; cfg.municipio='Belém'; await kvSet('cfg',cfg); pintarCfg(); }
     pintarBase(); pintarLista(); pintarProgresso(); pintarExport(); ranquear();
     $('#semBase').classList.add('oculto'); $('#blocoCampo').classList.remove('oculto');
-    toast('Pacote de demonstração carregado'); aba('campo');
+    toast('14 postes de teste criados em volta de você'); aba('campo');
   };
   $('#btnLimparBase').onclick = async () => {
     if (!confirm('Limpar a base de postes? Os registros já feitos permanecem.')) return;
