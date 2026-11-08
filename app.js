@@ -3,7 +3,7 @@
    Identificação do poste por posição + rumo (não por imagem).
    Funciona offline. Dados em IndexedDB. Exporta ZIP para o dossiê. */
 'use strict';
-const VERSAO = 'v0.5';
+const VERSAO = 'v0.7';
 
 /* ---------- 1. Persistência ---------- */
 const DB_NOME = 'invpostes', DB_VER = 1;
@@ -239,6 +239,7 @@ function pintarCandidatos(){
     if (p.bt) tags.push('<span class="tag bt">BT</span>');
     if (p.mt) tags.push('<span class="tag mt">MT</span>');
     if (p.ocupantes!=null) tags.push('<span class="tag ocup">'+p.ocupantes+' ocup. GEOSWEB</span>');
+    if (p.fora_da_os) tags.push('<span class="tag" style="background:#e3f0fb;color:#17476e">fora da OS</span>');
     if (p.irregularidades) tags.push('<span class="tag irr">irregularidade</span>');
     if (p.novo) tags.push('<span class="tag irr">fora da base</span>');
     return '<button class="cand '+(i===0&&!feito?'top':'')+(feito?' feito':'')+'" data-barr="'+esc(p.barramento)+'" data-rank="'+(pos==null?'':pos)+'">'
@@ -405,6 +406,7 @@ function pintarCaptura(p, r){
   const linhasMeta = [
     ['Nº do poste (barramento)', p.barramento],
     p.novo ? ['Origem', 'NÃO CADASTRADO NO GEOSWEB'] : null,
+    p.fora_da_os ? ['Origem', 'EXISTE NA BASE, FORA DA OS'] : null,
     p.novo ? ['Ocupação PRODEPA', p.ocupacao_prodepa ? 'tem' : 'sem'] : null,
     p.novo && p.gps_n ? ['Posição', p.gps_n>1 ? 'média de ' + p.gps_n + ' leituras' : 'leitura única do GPS'] : null,
     p.cod_id ? ['COD_ID BDGD', p.cod_id] : null,
@@ -446,7 +448,7 @@ function pintarCaptura(p, r){
     + '<button class="btn" id="btnConfirmar" '+(temA&&temD?'':'disabled')+'>'
     + (temA&&temD ? 'Confirmar registro e seguir' : 'Faltam as duas fotos') + '</button>'
     + '<div class="linha-btn">'
-    + '<button class="btn sec pequeno" id="btnNaoAchou" style="flex:1">Não encontrado em campo</button>'
+    + '<button class="btn sec pequeno" id="btnDescartar" style="flex:1">Descartar do projeto</button>'
     + (r && r.status!=='pendente' ? '<button class="btn perigo pequeno" id="btnApagarReg" style="flex:1">Apagar registro</button>' : '')
     + '</div>';
 
@@ -468,7 +470,7 @@ function pintarCaptura(p, r){
     ranquear(); pintarCaptura(p, regs[p.barramento]);
   };
   $('#btnConfirmar').onclick = () => salvarRegistro(p, 'auto');
-  $('#btnNaoAchou').onclick = () => salvarRegistro(p, 'nao_encontrado');
+  $('#btnDescartar').onclick = () => abrirDescarte(p);
   const ap = $('#btnApagarReg'); if (ap) ap.onclick = () => apagarRegistro(p.barramento);
 }
 function slotHtml(t, rot, tem, meta, era){
@@ -509,16 +511,18 @@ async function receberFoto(input, tipo){
     if (!meta.nitido) toast('Foto parece borrada — considere refazer', 3600);
   }catch(e){ console.error(e); toast('Não foi possível ler a foto'); }
 }
-async function salvarRegistro(p, modo){
+async function salvarRegistro(p, modo, motivo){
   const b = p.barramento;
   const ant = regs[b] || {};
+  const desc = modo === 'descartado';
   const reg = {
     barramento: b, seq: p.seq, cod_id: p.cod_id||'',
-    status: modo==='nao_encontrado' ? 'nao_encontrado'
-          : (p.ocupantes!=null && rascunho.ocup!==p.ocupantes ? 'divergente' : 'ok'),
-    ocupantes_campo: modo==='nao_encontrado' ? null : rascunho.ocup,
+    status: desc ? 'descartado'
+          : (p.ocupantes!=null && rascunho && rascunho.ocup!==p.ocupantes ? 'divergente' : 'ok'),
+    motivo: desc ? (motivo||'') : '',
+    ocupantes_campo: desc || !rascunho ? null : rascunho.ocup,
     ocupantes_geosweb: p.ocupantes!=null ? p.ocupantes : null,
-    obs: rascunho.obs || '',
+    obs: (rascunho && rascunho.obs) || '',
     ranking: abertoRank, ranking_busca: abertoRank==null,
     dist_m: null, desvio_rumo: null, rumo_fonte: rumoFonte,
     gps_lat: pos?pos.coords.latitude:null, gps_lon: pos?pos.coords.longitude:null,
@@ -529,18 +533,18 @@ async function salvarRegistro(p, modo){
   };
   const cand = candAtuais.find(c => c.p.barramento===b);
   if (cand){ reg.dist_m = Math.round(cand.d*10)/10; reg.desvio_rumo = rumo==null?null:Math.round(cand.dang); }
-  if (rascunho.fotoA){ reg.fotoA = chaveFoto(p,'A'); await fotoSet(reg.fotoA, rascunho.fotoA);
+  if (rascunho && rascunho.fotoA){ reg.fotoA = chaveFoto(p,'A'); await fotoSet(reg.fotoA, rascunho.fotoA);
     reg.metaA = { nitidez:rascunho.metaA.nitidez, nitido:rascunho.metaA.nitido, azimute:rascunho.metaA.azimute,
                   lat:rascunho.metaA.lat, lon:rascunho.metaA.lon, precisao:rascunho.metaA.precisao,
                   quando:rascunho.metaA.quando, bytes:rascunho.metaA.bytes }; }
-  if (rascunho.fotoD){ reg.fotoD = chaveFoto(p,'D'); await fotoSet(reg.fotoD, rascunho.fotoD);
+  if (rascunho && rascunho.fotoD){ reg.fotoD = chaveFoto(p,'D'); await fotoSet(reg.fotoD, rascunho.fotoD);
     reg.metaD = { nitidez:rascunho.metaD.nitidez, nitido:rascunho.metaD.nitido, azimute:rascunho.metaD.azimute,
                   lat:rascunho.metaD.lat, lon:rascunho.metaD.lon, precisao:rascunho.metaD.precisao,
                   quando:rascunho.metaD.quando, bytes:rascunho.metaD.bytes }; }
   regs[b] = reg;
   await kvSet('regs', regs);
   fecharModal();
-  toast(modo==='nao_encontrado' ? 'Poste marcado como não encontrado'
+  toast(desc ? 'Poste descartado — vai para a lista de desmarcar no GEOSWEB'
         : reg.status==='divergente' ? 'Registrado com divergência de ocupantes' : 'Registro concluído');
   ranquear(); pintarLista(); pintarProgresso(); pintarExport();
 }
@@ -596,7 +600,7 @@ function abrirNovoPoste(){
   $('#nCriar').onclick = criarNovoPoste;
 }
 /* ID_PONTO = ordem do inventário. Renumera 1..n depois de uma inserção. */
-function renumerar(){ postes.forEach((p, i) => p.seq = i+1); }
+function renumerar(){ let n = 0; postes.forEach(p => { p.seq = p.fora_da_os ? null : ++n; }); }
 function maisProximo(){
   if (!pos || !postes.length) return null;
   const aqui = { lat:pos.coords.latitude, lon:pos.coords.longitude };
@@ -672,6 +676,24 @@ async function criarNovoPoste(){
   pintarCaptura(novo, null);
   toast('Poste criado — agora as duas fotos');
 }
+/* Descartar é diferente de ainda não ter visitado. Só o descarte explícito
+   vira "desmarcar no GEOSWEB"; poste pendente significa inventário incompleto. */
+const MOTIVOS = [
+  ['trocado',        'Troquei por outro poste',      'a rota passou a usar outro poste, em geral do outro lado da via'],
+  ['nao_encontrado', 'Não existe em campo',          'o poste da base não foi encontrado no local'],
+  ['inacessivel',    'Inacessível ou inviável',      'existe, mas não dá para usar: obstruído, em obra, risco'],
+  ['sobra',          'Selecionado a mais',           'entrou na seleção por precaução e a rota não precisou dele']
+];
+function abrirDescarte(p){
+  $('#mTit').textContent = 'Descartar ' + p.barramento;
+  $('#mCorpo').innerHTML =
+      '<div class="aviso">Isto marca o poste para <b>desmarcar no GEOSWEB</b>. Use só quando a decisão estiver tomada — poste ainda não visitado deve ficar pendente.</div>'
+    + MOTIVOS.map(m => '<button class="btn sec" data-m="'+m[0]+'" style="margin-bottom:8px;text-align:left;justify-content:flex-start">'
+        + '<span><b>'+m[1]+'</b><br><span style="font-weight:400;font-size:12px;color:var(--neutro)">'+m[2]+'</span></span></button>').join('')
+    + '<button class="btn sec pequeno" id="dVoltar" style="margin-top:6px">Voltar</button>';
+  $('#mCorpo').querySelectorAll('[data-m]').forEach(b => b.onclick = () => salvarRegistro(p, 'descartado', b.dataset.m));
+  $('#dVoltar').onclick = () => abrirCaptura(p.barramento, abertoRank);
+}
 function abrirBusca(){
   abertoBarr=null; abertoRank=null;
   $('#mTit').textContent = 'Buscar poste';
@@ -695,8 +717,10 @@ function abrirBusca(){
 /* ---------- 11. Lista de postes ---------- */
 function itemHtml(p){
   const r = regs[p.barramento], st = r ? r.status : 'pendente';
-  const cls = st==='ok'?'ok':st==='divergente'?'div':st==='nao_encontrado'?'nao':'';
-  const txt = st==='ok'?'Concluído':st==='divergente'?'Divergente':st==='nao_encontrado'?'Não encontrado':'Pendente';
+  const cls = st==='ok'?'ok':st==='divergente'?'div':st==='descartado'?'nao':'';
+  const mot = (MOTIVOS.find(m=>m[0]===(r&&r.motivo))||[])[1];
+  const txt = st==='ok'?'Concluído':st==='divergente'?'Divergente'
+            : st==='descartado'?('Descartado'+(mot?' · '+mot.toLowerCase():'')):'Pendente';
   return '<button class="item" data-barr="'+esc(p.barramento)+'">'
     + '<span class="bolinha '+cls+'"></span>'
     + '<span style="flex:1;min-width:0">'
@@ -720,7 +744,8 @@ function pintarLista(){
   el.querySelectorAll('.item').forEach(b => b.onclick = () => abrirCaptura(b.dataset.barr, null));
 }
 function pintarProgresso(){
-  const t = postes.length, f = Object.values(regs).filter(r => r.status!=='pendente').length;
+  const t = postes.filter(p => !p.fora_da_os).length;
+  const f = Object.values(regs).filter(r => r.status!=='pendente').length;
   $('#pProg').textContent = f + '/' + t;
   $('#pProg').className = 'pill ' + (t&&f===t ? 'bom' : f ? 'medio' : '');
   $('#hdrOs').textContent = cfg.os ? 'OS ' + cfg.os : (cfg.projeto || '—');
@@ -856,8 +881,45 @@ function lerKml(txt){
   if (!out.length) throw new Error('Nenhum ponto (Placemark/Point) no KML');
   return out;
 }
+/* Pacote gerado pelo Painel do Projetista: traz os postes da OS já ordenados
+   e o cinturão da BDGD, que são as alternativas para troca de lado de via. */
+function lerPacote(d){
+  if (!d || !Array.isArray(d.postes)) throw new Error('JSON não é um pacote do painel');
+  return d.postes.map((p, i) => ({
+    seq: p.seq!=null ? p.seq : null,
+    barramento: p.barramento || ('BDGD-' + (p.cod_id || i)),
+    cod_id: p.cod_id || '',
+    lat: p.lat, lon: p.lon,
+    altura: p.altura || '', esforco: p.esforco || '',
+    material: p.material || '', estrutura: p.estrutura || '',
+    bt: !!p.bt, mt: !!p.mt,
+    ocupantes: p.ocupantes!=null ? p.ocupantes : null,
+    irregularidades: p.irregularidades || '',
+    logradouro: p.logradouro || '',
+    ocupacao_prodepa: !!p.ocupacao_prodepa,
+    origem: p.origem || 'GEOSWEB',
+    fora_da_os: p.origem === 'BDGD_FORA_DA_OS'
+  })).filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lon));
+}
 async function importarArquivo(file){
   const txt = await file.text();
+  const ehJson = /\.json$/i.test(file.name) || /^\s*\{/.test(txt.slice(0, 40));
+  if (ehJson){
+    const d = JSON.parse(txt);
+    postes = lerPacote(d);
+    if (d.os || d.projeto || d.municipio){
+      cfg.os = d.os || cfg.os; cfg.projeto = d.projeto || cfg.projeto;
+      cfg.municipio = d.municipio || cfg.municipio;
+      await kvSet('cfg', cfg); pintarCfg();
+    }
+    await kvSet('postes', postes);
+    pintarBase(); pintarLista(); pintarProgresso(); pintarExport(); ranquear();
+    $('#semBase').classList.add('oculto'); $('#blocoCampo').classList.remove('oculto');
+    const nOs = postes.filter(p=>!p.fora_da_os).length;
+    toast(nOs + ' postes da OS + ' + (postes.length-nOs) + ' do cinturão', 4000);
+    setTimeout(desenharMapa, 80);
+    return;
+  }
   const kml = /\.kml$|\.xml$/i.test(file.name) || /<kml/i.test(txt.slice(0,900));
   let novos = kml ? lerKml(txt) : lerCsv(txt);
   // dedupe por barramento, mantendo o primeiro
@@ -951,13 +1013,13 @@ function zip(arquivos){ // [{nome, dados:Uint8Array}]
 function csvInventario(){
   const cab = ['ID','BARRAMENTO','COD_ID','ORIGEM','OCUPACAO_PRODEPA','LAT_BASE','LON_BASE','STATUS','OCUP_GEOSWEB','OCUP_CAMPO',
     'DIVERGENCIA','FOTO_ABERTA','FOTO_DETALHE','NITIDEZ_A','NITIDEZ_D','AZIMUTE_A','LAT_GPS','LON_GPS',
-    'PRECISAO_GPS_M','RANKING','DIST_M','DESVIO_RUMO','BUSSOLA_OFF','DATA_HORA','OBS'];
+    'PRECISAO_GPS_M','RANKING','DIST_M','DESVIO_RUMO','BUSSOLA_OFF','MOTIVO_DESCARTE','DATA_HORA','OBS'];
   const lin = postes.map(p => {
     const r = regs[p.barramento] || {};
     const div = r.ocupantes_campo!=null && p.ocupantes!=null && r.ocupantes_campo!==p.ocupantes;
     return [
       p.seq!=null?p.seq:'', p.barramento, p.cod_id||'',
-      p.novo?'NAO_CADASTRADO':'GEOSWEB', p.novo?(p.ocupacao_prodepa?'TEM':'SEM'):'',
+      p.novo?'NAO_CADASTRADO':(p.fora_da_os?'BDGD_FORA_DA_OS':'GEOSWEB'), p.ocupacao_prodepa?'TEM':'SEM',
       virg(p.lat,7), virg(p.lon,7),
       r.status || 'pendente',
       p.ocupantes!=null?p.ocupantes:'', r.ocupantes_campo!=null?r.ocupantes_campo:'',
@@ -969,7 +1031,7 @@ function csvInventario(){
       r.gps_precisao!=null?r.gps_precisao:'',
       r.ranking!=null?r.ranking:(r.ranking_busca?'busca':''),
       r.dist_m!=null?virg(r.dist_m,1):'', r.desvio_rumo!=null?r.desvio_rumo:'',
-      cfg.bussolaOff||0,
+      cfg.bussolaOff||0, r.motivo||'',
       r.quando||'', (r.obs||'').replace(/[;\r\n]/g,' ')
     ].join(';');
   });
@@ -1035,11 +1097,11 @@ function pintarExport(){
   const v = Object.values(regs);
   const ok = v.filter(r=>r.status==='ok').length;
   const dv = v.filter(r=>r.status==='divergente').length;
-  const ne = v.filter(r=>r.status==='nao_encontrado').length;
+  const ne = v.filter(r=>r.status==='descartado').length;
   const borradas = v.filter(r => (r.metaA && !r.metaA.nitido) || (r.metaD && !r.metaD.nitido)).length;
   const nv = postes.filter(p=>p.novo).length;
   $('#kpis').innerHTML = [
-    [t,'postes'],[ok,'conformes'],[dv,'divergentes'],[ne,'não achados'],
+    [t,'postes'],[ok,'conformes'],[dv,'divergentes'],[ne,'descartados'],
     [t-(ok+dv+ne),'pendentes'],[borradas,'fotos borradas'],[nv,'fora da base']
   ].map(k => '<div class="kpi"><b>'+k[0]+'</b><span>'+k[1]+'</span></div>').join('');
 
@@ -1059,18 +1121,19 @@ function pintarExport(){
     '<div class="aviso"><b>'+esc(p.barramento)+'</b> — poste em campo fora do GEOSWEB'
     + ' — não cadastrado no GEOSWEB, ID_PONTO ' + p.seq
     + '. Entra no ANEXO B com a coordenada como nº do poste.</div>').join('');
-  const divs = v.filter(r => r.status==='divergente' || r.status==='nao_encontrado'
+  const divs = v.filter(r => r.status==='divergente' || r.status==='descartado'
     || (r.metaA&&!r.metaA.nitido) || (r.metaD&&!r.metaD.nitido));
   $('#listaDiv').innerHTML = novos + (!divs.length
     ? ''
     : divs.map(r => {
         const mot = [];
         if (r.status==='divergente') mot.push('ocupantes: GEOSWEB '+r.ocupantes_geosweb+' × campo '+r.ocupantes_campo);
-        if (r.status==='nao_encontrado') mot.push('poste não encontrado em campo');
+        if (r.status==='descartado') mot.push('descartado: ' +
+          ((MOTIVOS.find(m=>m[0]===r.motivo)||[,'motivo não informado'])[1]).toLowerCase());
         if (r.metaA&&!r.metaA.nitido) mot.push('foto aberta possivelmente borrada');
         if (r.metaD&&!r.metaD.nitido) mot.push('foto de detalhe possivelmente borrada');
         if (r.obs) mot.push('obs.: '+r.obs);
-        return '<div class="aviso'+(r.status==='nao_encontrado'?' erro':'')+'"><b>'+esc(r.barramento)+'</b><br>'+esc(mot.join(' · '))+'</div>';
+        return '<div class="aviso'+(r.status==='descartado'?' erro':'')+'"><b>'+esc(r.barramento)+'</b><br>'+esc(mot.join(' · '))+'</div>';
       }).join(''));
   if (!novos && !divs.length) $('#listaDiv').innerHTML = '<div class="aviso ok">Nenhuma divergência registrada.</div>';
 }
