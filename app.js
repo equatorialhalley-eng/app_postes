@@ -3,7 +3,7 @@
    Identificação do poste por posição + rumo (não por imagem).
    Funciona offline. Dados em IndexedDB. Exporta ZIP para o dossiê. */
 'use strict';
-const VERSAO = 'v0.7';
+const VERSAO = 'v0.8';
 
 /* ---------- 1. Persistência ---------- */
 const DB_NOME = 'invpostes', DB_VER = 1;
@@ -884,8 +884,10 @@ function lerKml(txt){
 /* Pacote gerado pelo Painel do Projetista: traz os postes da OS já ordenados
    e o cinturão da BDGD, que são as alternativas para troca de lado de via. */
 function lerPacote(d){
-  if (!d || !Array.isArray(d.postes)) throw new Error('JSON não é um pacote do painel');
-  return d.postes.map((p, i) => ({
+  const arr = Array.isArray(d) ? d : (d && Array.isArray(d.postes) ? d.postes : null);
+  if (!arr) throw new Error('JSON válido, mas sem a lista de postes. '
+    + 'Use o arquivo _PACOTE.json gerado pelo painel.');
+  return arr.map((p, i) => ({
     seq: p.seq!=null ? p.seq : null,
     barramento: p.barramento || ('BDGD-' + (p.cod_id || i)),
     cod_id: p.cod_id || '',
@@ -902,10 +904,16 @@ function lerPacote(d){
   })).filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lon));
 }
 async function importarArquivo(file){
-  const txt = await file.text();
-  const ehJson = /\.json$/i.test(file.name) || /^\s*\{/.test(txt.slice(0, 40));
+  let txt = await file.text();
+  if (txt.charCodeAt(0) === 0xFEFF) txt = txt.slice(1);     // BOM
+  txt = txt.trim();
+  if (!txt) throw new Error('O arquivo chegou vazio. Reenvie — o WhatsApp às vezes trunca.');
+  const ehJson = /^[\{\[]/.test(txt) || /\.json$/i.test(file.name);
   if (ehJson){
-    const d = JSON.parse(txt);
+    let d;
+    try { d = JSON.parse(txt); }
+    catch(e){ throw new Error('O arquivo não é um JSON válido (' + e.message + '). '
+      + 'Se veio por aplicativo de mensagem, baixe de novo sem abrir em editor.'); }
     postes = lerPacote(d);
     if (d.os || d.projeto || d.municipio){
       cfg.os = d.os || cfg.os; cfg.projeto = d.projeto || cfg.projeto;
@@ -1186,7 +1194,11 @@ async function iniciar(){
     const f = e.target.files[0]; e.target.value='';
     if (!f) return;
     try{ await importarArquivo(f); }
-    catch(err){ console.error(err); $('#infoBase').innerHTML = '<span style="color:var(--erro)">'+esc(err.message)+'</span>'; toast('Importação falhou'); }
+    catch(err){ console.error(err);
+      $('#infoBase').innerHTML = '<span style="color:var(--erro)"><b>Não consegui ler este arquivo.</b><br>'
+        + esc(err.message) + '<br><span style="color:var(--neutro)">Arquivo: ' + esc(f.name)
+        + ' · ' + (f.size/1024).toFixed(1) + ' KB</span></span>';
+      toast('Importação falhou — veja o motivo abaixo do botão', 5000); }
   };
   $('#btnDemo').onclick = async () => {
     if (!pos){ toast('Aguardando o GPS para posicionar os postes de teste…', 3000); return; }
