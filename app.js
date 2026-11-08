@@ -3,7 +3,7 @@
    Identificação do poste por posição + rumo (não por imagem).
    Funciona offline. Dados em IndexedDB. Exporta ZIP para o dossiê. */
 'use strict';
-const VERSAO = 'v0.9';
+const VERSAO = 'v1.0';
 
 /* ---------- 1. Persistência ---------- */
 const DB_NOME = 'invpostes', DB_VER = 1;
@@ -239,7 +239,8 @@ function pintarCandidatos(){
     if (p.bt) tags.push('<span class="tag bt">BT</span>');
     if (p.mt) tags.push('<span class="tag mt">MT</span>');
     if (p.ocupantes!=null) tags.push('<span class="tag ocup">'+p.ocupantes+' ocup. GEOSWEB</span>');
-    if (p.fora_da_os) tags.push('<span class="tag" style="background:#e3f0fb;color:#17476e">fora da OS</span>');
+    if (p.fora_da_os) tags.push('<span class="tag" style="background:#e3f0fb;color:#17476e">'
+      + (p.usado_da_base ? 'incluir na OS' : 'fora da OS') + '</span>');
     if (p.irregularidades) tags.push('<span class="tag irr">irregularidade</span>');
     if (p.novo) tags.push('<span class="tag irr">fora da base</span>');
     return '<button class="cand '+(i===0&&!feito?'top':'')+(feito?' feito':'')+'" data-barr="'+esc(p.barramento)+'" data-rank="'+(pos==null?'':pos)+'">'
@@ -542,6 +543,25 @@ async function salvarRegistro(p, modo, motivo){
                   lat:rascunho.metaD.lat, lon:rascunho.metaD.lon, precisao:rascunho.metaD.precisao,
                   quando:rascunho.metaD.quando, bytes:rascunho.metaD.bytes }; }
   regs[b] = reg;
+  // Primeira vez que um poste do cinturão é aprovado: ele passa a integrar a
+  // rota, é movido para junto do vizinho e todos são renumerados.
+  if (!desc && p.fora_da_os && !p.usado_da_base){
+    p.usado_da_base = true;
+    const i = postes.indexOf(p);
+    let alvo = -1, md = Infinity;
+    postes.forEach((q, k) => {
+      if (q === p || !naRota(q)) return;
+      const d = distM(posteCoord(p), posteCoord(q));
+      if (d < md){ md = d; alvo = k; }
+    });
+    if (alvo >= 0){
+      postes.splice(i, 1);
+      postes.splice(alvo + (alvo < i ? 1 : 0), 0, p);
+    }
+    renumerar();
+    reg.seq = p.seq;
+    await kvSet('postes', postes);
+  }
   await kvSet('regs', regs);
   fecharModal();
   toast(desc ? 'Poste descartado — vai para a lista de desmarcar no GEOSWEB'
@@ -600,7 +620,10 @@ function abrirNovoPoste(){
   $('#nCriar').onclick = criarNovoPoste;
 }
 /* ID_PONTO = ordem do inventário. Renumera 1..n depois de uma inserção. */
-function renumerar(){ let n = 0; postes.forEach(p => { p.seq = p.fora_da_os ? null : ++n; }); }
+/* ID_PONTO = ordem do inventário. Fica de fora só o poste do cinturão que
+   NÃO foi usado — uma vez usado ele é rota, e rota é numerada. */
+function naRota(p){ return !p.fora_da_os || p.usado_da_base; }
+function renumerar(){ let n = 0; postes.forEach(p => { p.seq = naRota(p) ? ++n : null; }); }
 function maisProximo(){
   if (!pos || !postes.length) return null;
   const aqui = { lat:pos.coords.latitude, lon:pos.coords.longitude };
@@ -744,7 +767,7 @@ function pintarLista(){
   el.querySelectorAll('.item').forEach(b => b.onclick = () => abrirCaptura(b.dataset.barr, null));
 }
 function pintarProgresso(){
-  const t = postes.filter(p => !p.fora_da_os).length;
+  const t = postes.filter(p => naRota(p)).length;
   const f = Object.values(regs).filter(r => r.status!=='pendente').length;
   $('#pProg').textContent = f + '/' + t;
   $('#pProg').className = 'pill ' + (t&&f===t ? 'bom' : f ? 'medio' : '');
