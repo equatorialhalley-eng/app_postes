@@ -1,5 +1,5 @@
 /* Service worker — cache-first para funcionar offline em campo */
-const CACHE = 'invpostes-v0-2';
+const CACHE = 'invpostes-v0-3';
 const ARQS = ['./', './index.html', './app.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

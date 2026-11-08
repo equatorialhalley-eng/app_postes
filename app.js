@@ -3,6 +3,7 @@
    Identificação do poste por posição + rumo (não por imagem).
    Funciona offline. Dados em IndexedDB. Exporta ZIP para o dossiê. */
 'use strict';
+const VERSAO = 'v0.3';
 
 /* ---------- 1. Persistência ---------- */
 const DB_NOME = 'invpostes', DB_VER = 1;
@@ -871,7 +872,7 @@ function pintarCfg(){
 }
 async function pintarArmazenamento(){
   const el = $('#infoArm');
-  let s = Object.values(regs).filter(r=>r.status!=='pendente').length + ' registros gravados.';
+  let s = 'Versão do app: ' + VERSAO + '. ' + Object.values(regs).filter(r=>r.status!=='pendente').length + ' registros gravados.';
   try{
     if (navigator.storage && navigator.storage.estimate){
       const e = await navigator.storage.estimate();
@@ -935,6 +936,21 @@ async function iniciar(){
     cfg.maxPx = Math.max(600, num($('#fPx').value,1600)|0);
     await kvSet('cfg', cfg); ranquear(); toast('Calibração salva');
   };
+  $('#btnAtualizar').onclick = async () => {
+    if (!confirm('Buscar a versão mais nova do app? Os registros e fotos deste aparelho são preservados.')) return;
+    toast('Atualizando…', 4000);
+    try{
+      if ('serviceWorker' in navigator){
+        const rs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(rs.map(r => r.unregister()));
+      }
+      if (window.caches){
+        const ks = await caches.keys();
+        await Promise.all(ks.map(k => caches.delete(k)));
+      }
+    }catch(e){ console.warn(e); }
+    location.reload(true);
+  };
   $('#btnZip').onclick = gerarZip;
   $('#btnCsvSo').onclick = () => baixar(new Blob([csvInventario()],{type:'text/csv;charset=utf-8'}), nomePacote()+'.csv');
   $('#btnZerar').onclick = async () => {
@@ -948,7 +964,15 @@ async function iniciar(){
   iniciarGps(); iniciarBussola(); setTimeout(desenharMapa, 120);
 
   if ('serviceWorker' in navigator){
-    try{ await navigator.serviceWorker.register('sw.js'); }catch(e){ console.warn('SW', e); }
+    try{
+      // updateViaCache:'none' faz o navegador ignorar o cache HTTP ao conferir o sw.js.
+      // Sem isso, o cache de 10 min do GitHub Pages segura a atualização.
+      const reg = await navigator.serviceWorker.register('sw.js', { updateViaCache:'none' });
+      reg.update().catch(()=>{});
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!window.__recarregando){ window.__recarregando = true; location.reload(); }
+      });
+    }catch(e){ console.warn('SW', e); }
   }
 }
 iniciar();
