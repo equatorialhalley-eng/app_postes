@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f3d2e">
+<title>Inventário de Postes — NT.00016.EQTL</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root{
+  --verde:#0f3d2e; --verde2:#17604a; --ok:#1b7f3b; --alerta:#b8860b;
+  --erro:#b3261e; --neutro:#5b6670; --linha:#d4d8db; --fundo:#f4f6f7;
+  --card:#ffffff; --texto:#15202b;
+  --tap:56px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;height:100%}
+body{
+  font:400 16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  background:var(--fundo); color:var(--texto);
+  padding-bottom:env(safe-area-inset-bottom);
+  -webkit-text-size-adjust:100%;
+}
+header{
+  background:var(--verde); color:#fff; padding:10px 12px;
+  padding-top:calc(10px + env(safe-area-inset-top));
+  position:sticky; top:0; z-index:50;
+}
+.hdr-top{display:flex;align-items:center;gap:8px;justify-content:space-between}
+.hdr-top strong{font-size:15px;letter-spacing:.2px}
+.hdr-os{font-size:12px;opacity:.85;font-variant-numeric:tabular-nums}
+.sensores{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.pill{
+  font-size:11.5px;font-weight:600;padding:4px 8px;border-radius:20px;
+  background:rgba(255,255,255,.16);display:flex;align-items:center;gap:5px;
+  font-variant-numeric:tabular-nums;
+}
+.pill.ruim{background:#8c1d18}
+.pill.medio{background:#8a6400}
+.pill.bom{background:#14612f}
+nav{display:flex;background:var(--verde2);position:sticky;top:0;z-index:49}
+nav button{
+  flex:1;background:none;border:0;color:#cfe3db;font:600 12px/1 inherit;
+  padding:11px 2px;letter-spacing:.3px;text-transform:uppercase;cursor:pointer;
+  border-bottom:3px solid transparent;
+}
+nav button.on{color:#fff;border-bottom-color:#fff}
+main{padding:12px;max-width:760px;margin:0 auto}
+.tela{display:none}.tela.on{display:block}
+.card{background:var(--card);border:1px solid var(--linha);border-radius:10px;padding:12px;margin-bottom:10px}
+.card h2{margin:0 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--neutro)}
+label{display:block;font-size:12px;font-weight:600;color:var(--neutro);margin:10px 0 4px}
+input[type=text],input[type=number],select,textarea{
+  width:100%;padding:11px;border:1px solid var(--linha);border-radius:8px;
+  font-family:inherit;font-size:16px;font-weight:400;background:#fff;color:var(--texto);
+}
+textarea{min-height:60px;resize:vertical}
+.btn{
+  display:flex;align-items:center;justify-content:center;gap:8px;width:100%;
+  min-height:var(--tap);padding:0 14px;border:0;border-radius:10px;
+  font:700 15px inherit;cursor:pointer;background:var(--verde);color:#fff;
+}
+.btn:active{filter:brightness(.92)}
+.btn[disabled]{background:#c3c9cd;color:#fff}
+.btn.sec{background:#fff;color:var(--verde);border:1.5px solid var(--verde)}
+.btn.perigo{background:#fff;color:var(--erro);border:1.5px solid var(--erro)}
+.btn.pequeno{min-height:42px;font-size:13.5px;width:auto;padding:0 12px}
+.linha-btn{display:flex;gap:8px;margin-top:10px}
+.cand{
+  background:var(--card);border:1px solid var(--linha);border-left:5px solid var(--neutro);
+  border-radius:10px;padding:11px 12px;margin-bottom:8px;cursor:pointer;display:block;width:100%;
+  text-align:left;font:inherit;color:inherit;
+}
+.cand.top{border-left-color:var(--verde);box-shadow:0 1px 6px rgba(15,61,46,.13)}
+.cand.feito{border-left-color:var(--ok);background:#f2f9f4}
+.cand-l1{display:flex;align-items:baseline;gap:8px;justify-content:space-between}
+.rank{
+  background:var(--verde);color:#fff;border-radius:6px;min-width:22px;height:22px;
+  display:inline-flex;align-items:center;justify-content:center;font:700 12px inherit;flex:none;
+}
+.cand:not(.top) .rank{background:var(--neutro)}
+.cand.feito .rank{background:var(--ok)}
+.barr{font:700 17px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:-.2px}
+.dist{font:700 15px inherit;color:var(--verde);font-variant-numeric:tabular-nums;white-space:nowrap}
+.cand-l2{font-size:12.5px;color:var(--neutro);margin-top:5px;display:flex;flex-wrap:wrap;gap:4px 10px}
+.tag{font-size:11px;font-weight:700;padding:2px 6px;border-radius:4px;background:#eceff1;color:#3c4a55}
+.tag.ocup{background:#fdf0d5;color:#7a5200}
+.tag.irr{background:#fbe9e7;color:#8c1d18}
+.tag.bt{background:#e3f0fb;color:#17476e}
+.tag.mt{background:#fde8f0;color:#7a1a42}
+#mapa{width:100%;height:190px;display:block;background:#e8edef;border-radius:10px;border:1px solid var(--linha)}
+.foto-slot{
+  border:2px dashed var(--linha);border-radius:10px;padding:10px;display:flex;gap:10px;
+  align-items:center;margin-bottom:8px;background:#fafbfb;
+}
+.foto-slot.tem{border-style:solid;border-color:var(--ok);background:#f2f9f4}
+.foto-slot img{width:72px;height:72px;object-fit:cover;border-radius:7px;flex:none;background:#ccc}
+.foto-info{flex:1;min-width:0;font-size:12.5px}
+.foto-info b{display:block;font-size:13.5px;margin-bottom:2px}
+.nitido{color:var(--ok);font-weight:700}
+.borrado{color:var(--erro);font-weight:700}
+.contador{display:flex;align-items:center;gap:10px;margin-top:4px}
+.contador button{
+  width:52px;height:52px;border-radius:10px;border:1.5px solid var(--verde);
+  background:#fff;color:var(--verde);font:700 26px/1 inherit;cursor:pointer;flex:none;
+}
+.contador output{
+  flex:1;text-align:center;font:800 30px inherit;font-variant-numeric:tabular-nums;
+  border:1px solid var(--linha);border-radius:10px;padding:7px 0;background:#fff;
+}
+.ref{font-size:12.5px;color:var(--neutro);margin-top:6px;text-align:center}
+.ref.diverge{color:#8c1d18;font-weight:700;background:#fbe9e7;padding:7px;border-radius:8px}
+.ref.confere{color:var(--ok);font-weight:600}
+.item{
+  display:flex;align-items:center;gap:10px;padding:10px 11px;border:1px solid var(--linha);
+  border-radius:9px;background:#fff;margin-bottom:6px;cursor:pointer;width:100%;
+  text-align:left;font:inherit;color:inherit;
+}
+.bolinha{width:11px;height:11px;border-radius:50%;flex:none;background:#c3c9cd}
+.bolinha.ok{background:var(--ok)}.bolinha.div{background:var(--alerta)}.bolinha.nao{background:var(--erro)}
+.filtros{display:flex;gap:6px;margin-bottom:10px;overflow-x:auto;padding-bottom:3px}
+.filtros button{
+  border:1px solid var(--linha);background:#fff;border-radius:20px;padding:7px 13px;
+  font:600 12.5px inherit;white-space:nowrap;cursor:pointer;color:var(--neutro)
+}
+.filtros button.on{background:var(--verde);color:#fff;border-color:var(--verde)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px}
+.kpi{background:#fff;border:1px solid var(--linha);border-radius:9px;padding:10px;text-align:center}
+.kpi b{display:block;font:800 24px inherit;font-variant-numeric:tabular-nums;color:var(--verde)}
+.kpi span{font-size:11px;color:var(--neutro);text-transform:uppercase;letter-spacing:.3px}
+.aviso{
+  background:#fdf6e3;border:1px solid #e8d9a8;border-left:4px solid var(--alerta);
+  border-radius:8px;padding:10px 11px;font-size:13px;margin-bottom:10px
+}
+.aviso.erro{background:#fbe9e7;border-color:#f0c4bf;border-left-color:var(--erro)}
+.aviso.ok{background:#f2f9f4;border-color:#bfe0ca;border-left-color:var(--ok)}
+.modal{
+  position:fixed;inset:0;background:rgba(10,20,16,.55);z-index:100;display:none;
+  align-items:flex-end;justify-content:center;
+}
+.modal.on{display:flex}
+.modal-cx{
+  background:var(--fundo);width:100%;max-width:760px;max-height:94vh;overflow-y:auto;
+  border-radius:14px 14px 0 0;padding:14px;padding-bottom:calc(14px + env(safe-area-inset-bottom));
+}
+.modal-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.modal-hd h3{margin:0;font-size:18px}
+.modal-hd .x{background:none;border:0;font-size:28px;line-height:1;color:var(--neutro);cursor:pointer;padding:0 6px}
+.meta{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;font-size:13px;margin-bottom:12px}
+.meta div{display:flex;justify-content:space-between;gap:6px;border-bottom:1px dotted var(--linha);padding-bottom:3px}
+.meta span:first-child{color:var(--neutro)}
+.meta span:last-child{font-weight:700;text-align:right}
+.tabela{width:100%;border-collapse:collapse;font-size:13px}
+.tabela th,.tabela td{text-align:left;padding:6px 4px;border-bottom:1px solid var(--linha)}
+.tabela th{color:var(--neutro);font-size:11px;text-transform:uppercase}
+.tabela td.n{text-align:right;font-variant-numeric:tabular-nums}
+.vazio{text-align:center;color:var(--neutro);padding:26px 10px;font-size:14px}
+.oculto{display:none!important}
+.mini{font-size:12px;color:var(--neutro);margin-top:6px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+#toast{
+  position:fixed;left:50%;transform:translateX(-50%);bottom:26px;z-index:200;
+  background:#15202b;color:#fff;padding:12px 18px;border-radius:24px;font:600 14px inherit;
+  opacity:0;transition:opacity .22s;pointer-events:none;max-width:90%;text-align:center
+}
+#toast.on{opacity:.96}
+</style>
+</head>
+<body>
+<header>
+  <div class="hdr-top">
+    <strong>INVENTÁRIO DE POSTES</strong>
+    <span class="hdr-os" id="hdrOs">—</span>
+  </div>
+  <div class="sensores">
+    <span class="pill" id="pGps">GPS —</span>
+    <span class="pill" id="pBus">Bússola —</span>
+    <span class="pill" id="pProg">0/0</span>
+  </div>
+</header>
+<nav>
+  <button data-t="campo" class="on">Campo</button>
+  <button data-t="postes">Postes</button>
+  <button data-t="projeto">Projeto</button>
+  <button data-t="exportar">Exportar</button>
+</nav>
+<main>
+
+<section class="tela on" id="t-campo">
+  <div id="semBase" class="aviso">Nenhum pacote de campo carregado. Vá em <b>Projeto</b> e importe o CSV/KML dos postes da OS, ou carregue o pacote de demonstração.</div>
+  <div id="blocoCampo" class="oculto">
+    <canvas id="mapa"></canvas>
+    <div class="mini" id="mapaLeg">Postes a até 80 m · seta = direção do aparelho</div>
+    <div style="margin-top:12px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px">
+        <h2 style="margin:0;font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--neutro)">Candidatos</h2>
+        <button class="btn pequeno sec" id="btnBuscar">Buscar por nº</button>
+      </div>
+      <div id="candidatos"></div>
+    </div>
+  </div>
+</section>
+
+<section class="tela" id="t-postes">
+  <div class="filtros" id="filtros">
+    <button data-f="todos" class="on">Todos</button>
+    <button data-f="pendente">Pendentes</button>
+    <button data-f="ok">Concluídos</button>
+    <button data-f="divergente">Divergentes</button>
+    <button data-f="nao_encontrado">Não achados</button>
+  </div>
+  <div id="listaPostes"></div>
+</section>
+
+<section class="tela" id="t-projeto">
+  <div class="card">
+    <h2>Identificação do projeto</h2>
+    <label for="fOs">OS da Equatorial (GEOSWEB)</label>
+    <input type="text" id="fOs" placeholder="2026.01.054880000000" inputmode="numeric">
+    <label for="fProj">Projeto / solicitante</label>
+    <input type="text" id="fProj" placeholder="42 – SEFA CERAT">
+    <label for="fMun">Município</label>
+    <input type="text" id="fMun" placeholder="Belém">
+    <button class="btn sec" id="btnSalvarCfg" style="margin-top:12px">Salvar identificação</button>
+  </div>
+
+  <div class="card">
+    <h2>Pacote de campo (postes da OS)</h2>
+    <p class="mini" style="margin-top:0">Aceita <b>CSV</b> (inclusive o <code>_enriquecido.csv</code>) e <b>KML</b>. Reconhece vírgula decimal e corrige coordenada estragada pelo Excel (-24.215.556 → -2,4215556).</p>
+    <input type="file" id="fBase" accept=".csv,.txt,.kml,.xml" class="oculto">
+    <button class="btn" id="btnImportar">Importar CSV / KML</button>
+    <div class="linha-btn">
+      <button class="btn sec pequeno" id="btnDemo" style="flex:1">Pacote de demonstração</button>
+      <button class="btn perigo pequeno" id="btnLimparBase" style="flex:1">Limpar base</button>
+    </div>
+    <div id="infoBase" class="mini"></div>
+  </div>
+
+  <div class="card">
+    <h2>Calibração</h2>
+    <label>Correção sistemática GEOSWEB → campo (metros)</label>
+    <div class="grid2">
+      <div><label for="fOE" style="margin-top:0">Leste (E)</label><input type="number" id="fOE" step="0.1" value="0"></div>
+      <div><label for="fON" style="margin-top:0">Norte (N)</label><input type="number" id="fON" step="0.1" value="0"></div>
+    </div>
+    <p class="mini">Medido em Tomé-Açu: +2,1 E / −1,95 N. Em Canaã: +1,00 E / −4,94 N. Aplicado às coordenadas da base antes do ranqueamento.</p>
+    <label for="fK">Peso do rumo no ranqueamento</label>
+    <input type="number" id="fK" step="0.05" value="0.35">
+    <p class="mini">Penalidade em metros por grau de desvio entre o rumo do aparelho e a direção do poste. 0 = só distância.</p>
+    <label for="fNit">Limite de nitidez da foto</label>
+    <input type="number" id="fNit" step="5" value="60">
+    <p class="mini">Variância de Laplaciano abaixo deste valor gera alerta de foto borrada.</p>
+    <label for="fPx">Lado maior da foto (px)</label>
+    <input type="number" id="fPx" step="100" value="1600">
+    <button class="btn sec" id="btnSalvarCal" style="margin-top:12px">Salvar calibração</button>
+  </div>
+
+  <div class="card">
+    <h2>Armazenamento</h2>
+    <div id="infoArm" class="mini"></div>
+    <div class="aviso" style="margin:10px 0 0">Os dados ficam só neste aparelho. <b>Exporte ao fim de cada dia de campo.</b></div>
+  </div>
+</section>
+
+<section class="tela" id="t-exportar">
+  <div class="card">
+    <h2>Resumo</h2>
+    <div class="kpis" id="kpis"></div>
+  </div>
+  <div class="card">
+    <h2>Validação do ranqueamento</h2>
+    <p class="mini" style="margin-top:0">Em que posição da lista estava o poste que o colaborador confirmou. É o número que valida ou derruba o conceito.</p>
+    <table class="tabela" id="tabRank"></table>
+  </div>
+  <div class="card">
+    <h2>Divergências</h2>
+    <div id="listaDiv"></div>
+  </div>
+  <div class="card">
+    <h2>Pacote de entrega</h2>
+    <p class="mini" style="margin-top:0">ZIP com as fotos nomeadas no padrão do dossiê, mais <code>inventario.csv</code>, <code>inventario.json</code> e <code>ranking.csv</code>.</p>
+    <button class="btn" id="btnZip">Gerar ZIP do inventário</button>
+    <div class="linha-btn">
+      <button class="btn sec pequeno" id="btnCsvSo" style="flex:1">Só o CSV</button>
+      <button class="btn perigo pequeno" id="btnZerar" style="flex:1">Zerar registros</button>
+    </div>
+    <div id="infoZip" class="mini"></div>
+  </div>
+</section>
+
+</main>
+
+<div class="modal" id="modal">
+  <div class="modal-cx">
+    <div class="modal-hd">
+      <h3 id="mTit">—</h3>
+      <button class="x" id="mFechar" aria-label="Fechar">&times;</button>
+    </div>
+    <div id="mCorpo"></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<input type="file" id="camA" accept="image/*" capture="environment" class="oculto">
+<input type="file" id="camD" accept="image/*" capture="environment" class="oculto">
+<script src="app.js"></script>
+</body>
+</html>
