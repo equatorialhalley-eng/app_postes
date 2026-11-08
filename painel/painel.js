@@ -3,7 +3,7 @@
    Saída: pacote do app de campo, KMZ inicial de backup, e — na volta —
    as três listas que o projetista precisa executar no GEOSWEB. */
 'use strict';
-const VERSAO = 'v0.1';
+const VERSAO = 'v0.2';
 
 /* ---------- utilidades ---------- */
 const $ = s => document.querySelector(s);
@@ -28,8 +28,70 @@ function vaoGeo(p,q){ const lat0=(p.lat+q.lat)/2*g2r, s=Math.sin(lat0), w=1-E2*s
   const n=A_/Math.sqrt(w), m=A_*(1-E2)/(w*Math.sqrt(w));
   return Math.hypot(n*Math.cos(lat0)*(q.lon-p.lon)*g2r, m*(q.lat-p.lat)*g2r); }
 
+/* ---------- logradouro pelo OSM ----------
+   Abreviaturas conforme o PROMPT-MESTRE §Passo 8. Sem número de porta: o OSM
+   não tem, e a regra manda não inventar — sai S/N. */
+const ABREV = [[/^avenida\s+/i,'Av. '],[/^travessa\s+/i,'Tv. '],[/^passagem\s+/i,'Pass. '],
+               [/^rua\s+/i,'R. '],[/^estrada\s+/i,'Estr. ']];
+const ABREV_MEIO = [[/\bdoutor\b/gi,'Dr.'],[/\bdoutora\b/gi,'Dra.'],
+                    [/\bprofessor\b/gi,'Prof.'],[/\bprofessora\b/gi,'Profa.']];
+function abreviar(nome){
+  let n = String(nome||'').trim();
+  for (const [re, ab] of ABREV) if (re.test(n)){ n = n.replace(re, ab); break; }
+  for (const [re, ab] of ABREV_MEIO) n = n.replace(re, ab);
+  return n;
+}
+/* Distância de um ponto a um segmento, em metros, no plano local. */
+function distSeg(p, a, b){
+  const m = p.lat*g2r, kx = Math.cos(m)*R*g2r, ky = R*g2r;
+  const px=(p.lon-a[1])*kx, py=(p.lat-a[0])*ky;
+  const bx=(b[1]-a[1])*kx,  by=(b[0]-a[0])*ky;
+  const L = bx*bx + by*by;
+  let t = L ? (px*bx + py*by)/L : 0;
+  t = t<0?0:t>1?1:t;
+  return Math.hypot(px - t*bx, py - t*by);
+}
+/* Índice das vias por célula de grade, para não varrer 16 mil linhas por poste. */
+function indexarVias(vias, celula=0.0025){
+  const g = new Map();
+  vias.forEach((v, iv) => {
+    const pts = v[1];
+    for (let i=0;i<pts.length-1;i++){
+      const a=pts[i], b=pts[i+1];
+      const la0=Math.min(a[0],b[0]), la1=Math.max(a[0],b[0]);
+      const lo0=Math.min(a[1],b[1]), lo1=Math.max(a[1],b[1]);
+      for (let x=Math.floor(la0/celula); x<=Math.floor(la1/celula); x++)
+        for (let y=Math.floor(lo0/celula); y<=Math.floor(lo1/celula); y++){
+          const k = x+'_'+y; if (!g.has(k)) g.set(k, []); g.get(k).push([iv, i]);
+        }
+    }
+  });
+  return { g, celula };
+}
+function viaMaisProxima(idx, vias, p, limite=60){
+  const { g, celula } = idx;
+  const a = Math.floor(p.lat/celula), b = Math.floor(p.lon/celula);
+  let melhor = null;
+  for (let i=-1;i<=1;i++) for (let j=-1;j<=1;j++){
+    const lista = g.get((a+i)+'_'+(b+j)); if (!lista) continue;
+    for (const [iv, is] of lista){
+      const pts = vias[iv][1];
+      const d = distSeg(p, pts[is], pts[is+1]);
+      if (!melhor || d < melhor.d) melhor = { d, nome: vias[iv][0] };
+    }
+  }
+  return melhor && melhor.d <= limite ? melhor : null;
+}
+function compor(via, bairro, cidade, cep){
+  if (!via) return '';
+  const p = [abreviar(via) + ', S/N'];
+  if (bairro) p.push(' - ' + bairro);
+  const c = [cidade, cep].filter(Boolean);
+  return p.join('') + (cidade ? ', ' + cidade + ' - PA' : '') + (cep ? ', ' + cep : '') + ', Brasil';
+}
+
 /* ---------- estado ---------- */
-let OS='', tipoOS='', postes=[], base=null, municipio='', cinturao=[], qualidade=null;
+let OS='', tipoOS='', postes=[], base=null, municipio='', cinturao=[], qualidade=null, idxVias=null;
 
 /* ---------- leitura da planilha ---------- */
 const COLS = {
@@ -120,7 +182,7 @@ async function lerMunicipio(file){
   const iC=c.indexOf('cod_id'), iLa=c.indexOf('lat'), iLo=c.indexOf('lon'),
         iA=c.indexOf('altura'), iE=c.indexOf('esforco'), iM=c.indexOf('material'),
         iS=c.indexOf('estrutura'), iB=c.indexOf('bt'), iT=c.indexOf('mt'), iU=c.indexOf('area');
-  return { municipio:d.municipio, postes: d.postes.map(p => ({
+  return { municipio:d.municipio, vias: d.vias || [], postes: d.postes.map(p => ({
     cod_id:p[iC], lat:p[iLa], lon:p[iLo], altura:p[iA], esforco:p[iE],
     material:p[iM], estrutura:p[iS], bt:p[iB], mt:p[iT], urbano:p[iU] })) };
 }
@@ -261,7 +323,22 @@ function processar(){
   postes = ordem.map(i => postes[i]);
   postes.forEach((p,i) => p.seq = i+1);
   montarCinturao();
+  derivarEnderecos();
   pintarPreparar();
+}
+function derivarEnderecos(){
+  if (!base || !base.vias || !base.vias.length){ postes.forEach(p => { p.via=''; p.logradouro=''; }); return; }
+  if (!idxVias) idxVias = indexarVias(base.vias);
+  const bairro = ($('#cBairro')||{}).value || '', cidade = ($('#cMunNome')||{}).value || '',
+        cep = ($('#cCep')||{}).value || '';
+  const aplicar = p => {
+    const v = viaMaisProxima(idxVias, base.vias, p);
+    p.via = v ? v.nome : '';
+    p.dist_via = v ? v.d : null;
+    p.logradouro = compor(p.via, bairro, cidade, cep);
+  };
+  postes.forEach(aplicar);
+  cinturao.forEach(aplicar);
 }
 function montarCinturao(){
   cinturao = [];
@@ -296,7 +373,9 @@ function pintarPreparar(){
     [comIrr,'c/ irregularidade', comIrr?'alerta':''],
     [pdp,'c/ PRODEPA',''],
     [Math.round(metr)+' m','metragem',''],
-    [cinturao.length,'cinturão BDGD','']
+    [cinturao.length,'cinturão BDGD',''],
+    [postes.filter(p=>p.via).length + '/' + postes.length, 'c/ logradouro',
+      postes.filter(p=>p.via).length < postes.length ? 'alerta' : '']
   ].map(k=>'<div class="kpi '+k[2]+'"><b>'+k[0]+'</b><span>'+k[1]+'</span></div>').join('');
 
   const q = qualidade;
@@ -318,12 +397,13 @@ function pintarPreparar(){
       + '<td class="n">'+(p.ocupantes||0)+'</td>'
       + '<td>'+(p.altura?esc(p.altura)+' m':'<span class="mini">—</span>')
       + (p.esforco?' · '+esc(p.esforco)+' daN':'')+'</td>'
+      + '<td>'+(p.via ? esc(abreviar(p.via)) : '<span class="mini">sem via nomeada</span>')+'</td>'
       + '<td>'+(p.ocupacao_prodepa?'<span class="tag nv">PRODEPA</span> ':'')
       + (p.irregularidades?'<span class="tag er">'+esc(p.irregularidades.split(' · ')[0])+'</span>':'')
       + (p.dist_bdgd!=null && p.dist_bdgd>15?'<span class="tag al">base a '+virg(p.dist_bdgd,0)+' m</span>':'')
       + '</td></tr>';
   });
-  $('#tRota').innerHTML = '<tr><th>ID</th><th>Barramento</th><th>vão</th><th>ocup.</th><th>BDGD</th><th></th></tr>' + linhas;
+  $('#tRota').innerHTML = '<tr><th>ID</th><th>Barramento</th><th>vão</th><th>ocup.</th><th>BDGD</th><th>logradouro</th><th></th></tr>' + linhas;
   $('#infoRota').innerHTML = 'Caminho aberto por vizinho mais próximo com 2-opt. Metragem geodésica: <b>'
     + virg(m,1) + ' m</b>. Confira o sentido: o ID 1 deve ser o ponto de presença da PRODEPA.';
 }
@@ -342,15 +422,21 @@ function montarPacote(){
       material:p.material||'', estrutura:p.estrutura||'',
       bt:!!p.bt, mt:!!p.mt, ocupantes:p.ocupantes,
       irregularidades:p.irregularidades||'', ocupacao_prodepa:!!p.ocupacao_prodepa,
-      origem:'GEOSWEB'
+      logradouro:p.logradouro||'', origem:'GEOSWEB'
     })).concat(cinturao.map(p => ({
       seq:null, barramento:'', cod_id:p.cod_id, lat:p.lat, lon:p.lon,
       altura:p.altura!=null?p.altura+' m':'', esforco:p.esforco!=null?p.esforco+' daN':'',
       material:p.material||'', estrutura:p.estrutura||'',
       bt:!!p.bt, mt:!!p.mt, ocupantes:null, irregularidades:'',
-      ocupacao_prodepa:false, origem:'BDGD_FORA_DA_OS'
+      ocupacao_prodepa:false, logradouro:p.logradouro||'', origem:'BDGD_FORA_DA_OS'
     })))
   };
+}
+
+function csvEnderecos(){
+  const lin = ['BARRAMENTO;ENDERECO'];
+  postes.forEach(p => { if (p.logradouro) lin.push(p.barramento + ';' + p.logradouro); });
+  return '\uFEFF' + lin.join('\r\n') + '\r\n';
 }
 
 /* ---------- retorno do campo ---------- */
@@ -498,6 +584,11 @@ window.addEventListener('DOMContentLoaded', () => {
     toast('Sentido invertido');
   };
   $('#cRaio').onchange = () => { montarCinturao(); pintarPreparar(); };
+  ['#cBairro','#cCep','#cMunNome'].forEach(id => {
+    const e = $(id); if (e) e.onchange = () => { derivarEnderecos(); pintarPreparar(); };
+  });
+  $('#btnEnd').onclick = () => baixar(
+    new Blob([csvEnderecos()], {type:'text/csv;charset=utf-8'}), nomeBase()+'_ENDERECOS.csv');
 
   $('#btnPacote').onclick = () => {
     const p = montarPacote();
