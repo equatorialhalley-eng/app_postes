@@ -3,7 +3,7 @@
    Identificação do poste por posição + rumo (não por imagem).
    Funciona offline. Dados em IndexedDB. Exporta ZIP para o dossiê. */
 'use strict';
-const VERSAO = 'v0.4';
+const VERSAO = 'v0.5';
 
 /* ---------- 1. Persistência ---------- */
 const DB_NOME = 'invpostes', DB_VER = 1;
@@ -82,7 +82,7 @@ function virg(n, dec){ return n==null || !Number.isFinite(n) ? '' : n.toFixed(de
 function agora(){ const d=new Date(), p=n=>String(n).padStart(2,'0');
   return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds()); }
 function seq3(n){ return String(n).padStart(3,'0'); }
-function limpaNome(s){ return String(s||'').replace(/[^A-Za-z0-9._-]/g,'_'); }
+function limpaNome(s){ return String(s||'').replace(/[^A-Za-z0-9._-]/g,'_').replace(/_+/g,'_'); }
 
 /* ---------- 4. Geometria ---------- */
 const R = 6371008.8, g2r = Math.PI/180;
@@ -375,8 +375,12 @@ async function processarFoto(file, poste, tipo){
 }
 
 /* ---------- 9. Captura ---------- */
+/* Chave de armazenamento: só o barramento. Estável mesmo quando a inserção de
+   um poste no meio da rota renumera o ID_PONTO de todos os seguintes. */
+function chaveFoto(p, tipo){ return limpaNome(p.barramento) + '_' + tipo; }
+/* Nome na exportação: aí sim com o ID_PONTO, para a pasta sair na ordem da rota. */
 function nomeFoto(p, tipo){
-  const id = p.seq!=null ? seq3(p.seq) : 'NOVO';
+  const id = p.seq!=null ? seq3(p.seq) : '000';
   return limpaNome(cfg.os||'SEM-OS') + '_' + id + '_' + limpaNome(p.barramento) + '_' + tipo + '.jpg';
 }
 function abrirCaptura(barr, rank){
@@ -400,8 +404,8 @@ function pintarCaptura(p, r){
   const div = ref!=null && rascunho.ocup!==ref;
   const linhasMeta = [
     ['Nº do poste (barramento)', p.barramento],
-    p.novo ? ['Origem', 'CADASTRADO EM CAMPO'] : null,
-    p.novo && p.apos ? ['Entra após', p.apos] : null,
+    p.novo ? ['Origem', 'NÃO CADASTRADO NO GEOSWEB'] : null,
+    p.novo ? ['Ocupação PRODEPA', p.ocupacao_prodepa ? 'tem' : 'sem'] : null,
     p.novo && p.gps_n ? ['Posição', p.gps_n>1 ? 'média de ' + p.gps_n + ' leituras' : 'leitura única do GPS'] : null,
     p.cod_id ? ['COD_ID BDGD', p.cod_id] : null,
     p.seq!=null ? ['ID no projeto', p.seq] : null,
@@ -497,7 +501,7 @@ async function receberFoto(input, tipo){
   try{
     const { blob, meta } = await processarFoto(f, p, tipo);
     meta.url = URL.createObjectURL(blob);
-    meta.nome = nomeFoto(p, tipo);
+    meta.nome = chaveFoto(p, tipo);
     meta.bytes = blob.size;
     if (tipo==='A'){ rascunho.fotoA = blob; rascunho.metaA = meta; }
     else { rascunho.fotoD = blob; rascunho.metaD = meta; }
@@ -525,11 +529,11 @@ async function salvarRegistro(p, modo){
   };
   const cand = candAtuais.find(c => c.p.barramento===b);
   if (cand){ reg.dist_m = Math.round(cand.d*10)/10; reg.desvio_rumo = rumo==null?null:Math.round(cand.dang); }
-  if (rascunho.fotoA){ reg.fotoA = nomeFoto(p,'A'); await fotoSet(reg.fotoA, rascunho.fotoA);
+  if (rascunho.fotoA){ reg.fotoA = chaveFoto(p,'A'); await fotoSet(reg.fotoA, rascunho.fotoA);
     reg.metaA = { nitidez:rascunho.metaA.nitidez, nitido:rascunho.metaA.nitido, azimute:rascunho.metaA.azimute,
                   lat:rascunho.metaA.lat, lon:rascunho.metaA.lon, precisao:rascunho.metaA.precisao,
                   quando:rascunho.metaA.quando, bytes:rascunho.metaA.bytes }; }
-  if (rascunho.fotoD){ reg.fotoD = nomeFoto(p,'D'); await fotoSet(reg.fotoD, rascunho.fotoD);
+  if (rascunho.fotoD){ reg.fotoD = chaveFoto(p,'D'); await fotoSet(reg.fotoD, rascunho.fotoD);
     reg.metaD = { nitidez:rascunho.metaD.nitidez, nitido:rascunho.metaD.nitido, azimute:rascunho.metaD.azimute,
                   lat:rascunho.metaD.lat, lon:rascunho.metaD.lon, precisao:rascunho.metaD.precisao,
                   quando:rascunho.metaD.quando, bytes:rascunho.metaD.bytes }; }
@@ -552,24 +556,27 @@ function fecharModal(){ $('#modal').classList.remove('on'); abertoBarr=null; abe
    a numeração da rota pertence ao pipeline do dossiê. Fica marcado como NOVO
    e ancorado "após" o poste da base mais próximo, para o projetista decidir. */
 let mediaPos = null;
+let novoPdp = false;
 function abrirNovoPoste(){
   if (!pos) return toast('Aguardando o GPS');
   abertoBarr = null; abertoRank = null;
   mediaPos = { soma_lat:0, soma_lon:0, peso:0, n:0 };
-  const nnovos = postes.filter(p => p.novo).length;
-  const sugerido = 'NOVO-' + String(nnovos+1).padStart(2,'0');
   const perto = maisProximo();
   $('#mTit').textContent = 'Poste fora da base';
   $('#mCorpo').innerHTML =
       '<div class="aviso">Use isto só para poste que <b>existe em campo e não consta do GEOSWEB</b>. '
     + 'Ele não entra na numeração da rota — fica marcado para o projetista resolver o cadastro.</div>'
-    + '<label for="nBarr">Identificação provisória</label>'
-    + '<input type="text" id="nBarr" value="'+sugerido+'" autocomplete="off">'
+    + '<label>Nº do poste (ANEXO B: a própria coordenada)</label>'
+    + '<div class="card" style="margin:0 0 10px"><b id="nBarr" class="barr" style="font-size:15px"></b></div>'
     + '<label>Posição</label>'
     + '<div class="card" style="margin:0 0 10px"><div id="nPos" class="mini"></div>'
     + '<button class="btn sec pequeno" id="nMedir" style="margin-top:8px;width:100%">Melhorar posição (10 s parado)</button></div>'
     + '<label>Onde ele entra na rota</label>'
     + '<div class="mini" id="nApos">'+(perto ? 'Logo após <b>'+esc(perto.p.barramento)+'</b> ('+perto.d.toFixed(0)+' m)' : 'Sem poste da base por perto')+'</div>'
+    + '<label>Ocupação da PRODEPA neste poste</label>'
+    + '<div class="linha-btn" style="margin-bottom:4px">'
+    + '<button class="btn sec pequeno" id="nPdpSim" style="flex:1">Tem</button>'
+    + '<button class="btn pequeno" id="nPdpNao" style="flex:1">Não tem</button></div>'
     + '<label for="nOcup">Ocupantes contados em campo</label>'
     + '<input type="number" id="nOcup" value="0" min="0" max="99" inputmode="numeric">'
     + '<label for="nObs">Observação</label>'
@@ -577,9 +584,19 @@ function abrirNovoPoste(){
     + '<button class="btn" id="nCriar" style="margin-top:12px">Criar e fotografar</button>';
   $('#modal').classList.add('on');
   pintarPosNovo();
+  novoPdp = false;
+  const marca = () => {
+    $('#nPdpSim').className = 'btn pequeno' + (novoPdp ? '' : ' sec');
+    $('#nPdpNao').className = 'btn pequeno' + (novoPdp ? ' sec' : '');
+  };
+  $('#nPdpSim').onclick = () => { novoPdp = true; marca(); };
+  $('#nPdpNao').onclick = () => { novoPdp = false; marca(); };
+  marca();
   $('#nMedir').onclick = medirPosicao;
   $('#nCriar').onclick = criarNovoPoste;
 }
+/* ID_PONTO = ordem do inventário. Renumera 1..n depois de uma inserção. */
+function renumerar(){ postes.forEach((p, i) => p.seq = i+1); }
 function maisProximo(){
   if (!pos || !postes.length) return null;
   const aqui = { lat:pos.coords.latitude, lon:pos.coords.longitude };
@@ -590,6 +607,9 @@ function maisProximo(){
   });
   return m;
 }
+/* Regra do ANEXO B: no poste não cadastrado o "Nº do Poste" é a própria
+   coordenada decimal, no formato "lat, long". */
+function barramentoCoord(lat, lon){ return lat.toFixed(7) + ', ' + lon.toFixed(7); }
 function posNovo(){
   if (mediaPos && mediaPos.peso > 0)
     return { lat: mediaPos.soma_lat/mediaPos.peso, lon: mediaPos.soma_lon/mediaPos.peso, n: mediaPos.n };
@@ -598,6 +618,8 @@ function posNovo(){
 function pintarPosNovo(){
   const e = $('#nPos'); if (!e) return;
   const p = posNovo();
+  const nb = $('#nBarr');
+  if (nb && p) nb.textContent = barramentoCoord(p.lat, p.lon);
   e.innerHTML = p ? p.lat.toFixed(6)+', '+p.lon.toFixed(6)
       + ' · ±'+(pos?Math.round(pos.coords.accuracy):'?')+' m'
       + (p.n>1 ? ' · <b>média de '+p.n+' leituras</b>' : ' · leitura única') : 'sem GPS';
@@ -622,21 +644,25 @@ function medirPosicao(){
 }
 async function criarNovoPoste(){
   const p0 = posNovo(); if (!p0) return toast('Sem GPS');
-  const barr = ($('#nBarr').value || '').trim() || ('NOVO-' + Date.now());
-  if (postes.some(x => String(x.barramento).toUpperCase() === barr.toUpperCase()))
-    return toast('Já existe um poste com essa identificação');
+  const barr = barramentoCoord(p0.lat, p0.lon);
+  if (postes.some(x => String(x.barramento) === barr))
+    return toast('Já existe um poste nessa coordenada');
   const perto = maisProximo();
   const novo = {
     seq: null, barramento: barr, cod_id: '',
     lat: p0.lat, lon: p0.lon,
     altura:'', esforco:'', material:'', estrutura:'', bt:false, mt:false,
     ocupantes: null, irregularidades:'', logradouro:'',
-    novo: true, origem: 'campo',
+    novo: true, origem: 'campo', ocupacao_prodepa: novoPdp,
     apos: perto ? perto.p.barramento : '',
     gps_n: p0.n, gps_precisao: pos ? Math.round(pos.coords.accuracy) : null,
     criado_em: agora()
   };
-  postes.push(novo);
+  // entra NA sequência, logo após a âncora, e todos são renumerados:
+  // o ID_PONTO é a ordem do inventário, e o ANEXO A lista os dois tipos juntos.
+  const i = perto ? postes.findIndex(x => x.barramento === perto.p.barramento) : -1;
+  if (i >= 0) postes.splice(i+1, 0, novo); else postes.push(novo);
+  renumerar();
   await kvSet('postes', postes);
   const oc = parseInt($('#nOcup').value, 10) || 0;
   const obs = $('#nObs').value || '';
@@ -923,7 +949,7 @@ function zip(arquivos){ // [{nome, dados:Uint8Array}]
 
 /* ---------- 14. Exportação ---------- */
 function csvInventario(){
-  const cab = ['ID','BARRAMENTO','COD_ID','ORIGEM','ENTRA_APOS','LAT_BASE','LON_BASE','STATUS','OCUP_GEOSWEB','OCUP_CAMPO',
+  const cab = ['ID','BARRAMENTO','COD_ID','ORIGEM','OCUPACAO_PRODEPA','LAT_BASE','LON_BASE','STATUS','OCUP_GEOSWEB','OCUP_CAMPO',
     'DIVERGENCIA','FOTO_ABERTA','FOTO_DETALHE','NITIDEZ_A','NITIDEZ_D','AZIMUTE_A','LAT_GPS','LON_GPS',
     'PRECISAO_GPS_M','RANKING','DIST_M','DESVIO_RUMO','BUSSOLA_OFF','DATA_HORA','OBS'];
   const lin = postes.map(p => {
@@ -931,12 +957,12 @@ function csvInventario(){
     const div = r.ocupantes_campo!=null && p.ocupantes!=null && r.ocupantes_campo!==p.ocupantes;
     return [
       p.seq!=null?p.seq:'', p.barramento, p.cod_id||'',
-      p.novo?'CAMPO':'GEOSWEB', p.novo?(p.apos||''):'',
+      p.novo?'NAO_CADASTRADO':'GEOSWEB', p.novo?(p.ocupacao_prodepa?'TEM':'SEM'):'',
       virg(p.lat,7), virg(p.lon,7),
       r.status || 'pendente',
       p.ocupantes!=null?p.ocupantes:'', r.ocupantes_campo!=null?r.ocupantes_campo:'',
       div?'SIM':(r.status?'NAO':''),
-      r.fotoA||'', r.fotoD||'',
+      r.fotoA?nomeFoto(p,'A'):'', r.fotoD?nomeFoto(p,'D'):'',
       r.metaA?r.metaA.nitidez:'', r.metaD?r.metaD.nitidez:'',
       r.metaA&&r.metaA.azimute!=null?r.metaA.azimute:'',
       r.gps_lat!=null?virg(r.gps_lat,7):'', r.gps_lon!=null?virg(r.gps_lon,7):'',
@@ -972,11 +998,12 @@ async function gerarZip(){
   const arqs = [];
   $('#infoZip').textContent = 'Montando pacote…';
   let n = 0;
-  for (const r of Object.values(regs)){
-    for (const f of [r.fotoA, r.fotoD]){
-      if (!f) continue;
-      const b = await fotoGet(f);
-      if (b) { arqs.push({ nome:'fotos/'+f, dados:new Uint8Array(await b.arrayBuffer()) }); n++; }
+  for (const p of postes){
+    const r = regs[p.barramento]; if (!r) continue;
+    for (const [chave, tipo] of [[r.fotoA,'A'], [r.fotoD,'D']]){
+      if (!chave) continue;
+      const b = await fotoGet(chave);
+      if (b) { arqs.push({ nome:'fotos/'+nomeFoto(p,tipo), dados:new Uint8Array(await b.arrayBuffer()) }); n++; }
     }
   }
   arqs.push({ nome:'inventario.csv', dados:enc.encode(csvInventario()) });
@@ -1030,8 +1057,8 @@ function pintarExport(){
 
   const novos = postes.filter(p=>p.novo).map(p =>
     '<div class="aviso"><b>'+esc(p.barramento)+'</b> — poste em campo fora do GEOSWEB'
-    + (p.apos?', logo após '+esc(p.apos):'')
-    + '. Precisa de cadastro na concessionária antes de entrar na rota.</div>').join('');
+    + ' — não cadastrado no GEOSWEB, ID_PONTO ' + p.seq
+    + '. Entra no ANEXO B com a coordenada como nº do poste.</div>').join('');
   const divs = v.filter(r => r.status==='divergente' || r.status==='nao_encontrado'
     || (r.metaA&&!r.metaA.nitido) || (r.metaD&&!r.metaD.nitido));
   $('#listaDiv').innerHTML = novos + (!divs.length

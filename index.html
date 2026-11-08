@@ -195,7 +195,10 @@ textarea{min-height:60px;resize:vertical}
     <div style="margin-top:12px">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px">
         <h2 style="margin:0;font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--neutro)">Candidatos</h2>
-        <button class="btn pequeno sec" id="btnBuscar">Buscar por nº</button>
+        <div style="display:flex;gap:6px">
+          <button class="btn pequeno sec" id="btnBuscar">Buscar nº</button>
+          <button class="btn pequeno sec" id="btnNovoPoste" style="border-color:#b8860b;color:#7a5200">Fora da base</button>
+        </div>
       </div>
       <div id="candidatos"></div>
     </div>
@@ -248,6 +251,9 @@ textarea{min-height:60px;resize:vertical}
     <label for="fK">Peso do rumo no ranqueamento</label>
     <input type="number" id="fK" step="0.05" value="0.35">
     <p class="mini">Penalidade em metros por grau de desvio entre o rumo do aparelho e a direção do poste. 0 = só distância.</p>
+    <label for="fBus">Correção da bússola (graus)</label>
+    <input type="number" id="fBus" step="1" value="0">
+    <p class="mini">Somada à leitura do aparelho. Cobre declinação magnética e viés do sensor. O jeito certo de preencher é em campo: abra um poste a 20 m ou mais, aponte para ele e use o botão de calibrar.</p>
     <label for="fNit">Limite de nitidez da foto</label>
     <input type="number" id="fNit" step="5" value="60">
     <p class="mini">Variância de Laplaciano abaixo deste valor gera alerta de foto borrada.</p>
