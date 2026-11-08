@@ -3,7 +3,7 @@
    Identificação do poste por posição + rumo (não por imagem).
    Funciona offline. Dados em IndexedDB. Exporta ZIP para o dossiê. */
 'use strict';
-const VERSAO = 'v0.3';
+const VERSAO = 'v0.4';
 
 /* ---------- 1. Persistência ---------- */
 const DB_NOME = 'invpostes', DB_VER = 1;
@@ -53,13 +53,15 @@ async function fotosLimpar(){
 }
 
 /* ---------- 2. Estado ---------- */
-const CFG_PADRAO = { os:'', projeto:'', municipio:'', offE:0, offN:0, k:0.35, nitidez:60, maxPx:1600, jpeg:0.82 };
+const CFG_PADRAO = { os:'', projeto:'', municipio:'', offE:0, offN:0, k:0.35, nitidez:60, maxPx:1600, jpeg:0.82, bussolaOff:0 };
 let cfg = Object.assign({}, CFG_PADRAO);
 let postes = [];              // base do pacote de campo
 let regs = {};                // barramento -> registro
 let pos = null;               // GeolocationPosition
-let rumo = null;              // graus 0-360 (norte verdadeiro), null se indisponível
+let rumo = null;              // graus 0-360, direção da CÂMERA traseira
 let rumoFonte = '';
+let rumoEm = 0;               // timestamp da última leitura de orientação
+let rumoCru = null;           // sem o offset de calibração
 let candAtuais = [];
 let filtro = 'todos';
 let abertoBarr = null;        // poste aberto no modal
@@ -120,32 +122,75 @@ function pintarGps(){
   e.textContent = 'GPS ±' + a.toFixed(0) + ' m';
   e.className = 'pill ' + (a<=8 ? 'bom' : a<=20 ? 'medio' : 'ruim');
 }
+/* Direção para onde a CÂMERA TRASEIRA aponta, a partir da matriz de rotação
+   completa (alpha/beta/gamma). Usar só 360-alpha vale apenas com o aparelho
+   sem rotação lateral; com o celular inclinado ou deitado o erro chega a 90°. */
+function rumoDaCamera(alpha, beta, gamma){
+  if (alpha==null || beta==null || gamma==null) return null;
+  const d = Math.PI/180;
+  const cA=Math.cos(alpha*d), sA=Math.sin(alpha*d);
+  const cB=Math.cos(beta*d),  sB=Math.sin(beta*d);
+  const cG=Math.cos(gamma*d), sG=Math.sin(gamma*d);
+  // vetor -z do aparelho (câmera traseira) levado ao referencial Terra
+  const leste = -(cA*sG + sA*sB*cG);
+  const norte =  (cA*sB*cG - sA*sG);
+  if (Math.hypot(leste, norte) < 0.2) return null;   // aparelho quase deitado
+  return (Math.atan2(leste, norte)/d + 360) % 360;
+}
+/* Direção do TOPO do aparelho — usada quando ele está deitado, para o mapa. */
+function rumoDoTopo(alpha, beta, gamma){
+  if (alpha==null) return null;
+  const d = Math.PI/180;
+  const cA=Math.cos(alpha*d), sA=Math.sin(alpha*d);
+  const cB=Math.cos((beta||0)*d);
+  const leste = -sA*cB, norte = cA*cB;
+  if (Math.hypot(leste, norte) < 0.2) return null;
+  return (Math.atan2(leste, norte)/d + 360) % 360;
+}
 function aplicarRumo(h, fonte){
   if (h==null || !Number.isFinite(h)) return;
-  rumo = (h+360)%360; rumoFonte = fonte;
-  const e = $('#pBus'); e.textContent = 'Bússola ' + rumo.toFixed(0) + '°'; e.className = 'pill bom';
+  rumoCru = (h+360)%360;
+  rumo = (rumoCru + (cfg.bussolaOff||0) + 360) % 360;
+  rumoFonte = fonte; rumoEm = Date.now();
+  const e = $('#pBus');
+  e.textContent = 'Bússola ' + rumo.toFixed(0) + '°' + (cfg.bussolaOff ? '*' : '');
+  e.className = 'pill bom';
   desenharMapa(); pintarCandidatos();
 }
+function rumoVelho(){ return rumo!=null && (Date.now()-rumoEm) > 3000; }
 function iniciarBussola(){
   const e = $('#pBus');
   const precisaPedir = typeof DeviceOrientationEvent !== 'undefined'
     && typeof DeviceOrientationEvent.requestPermission === 'function';
+  const trata = (ev, fonte) => {
+    let a = ev.alpha;
+    // no iOS o valor confiável é webkitCompassHeading (rumo do topo); converte para alpha
+    if (ev.webkitCompassHeading!=null){ a = 360 - ev.webkitCompassHeading; fonte = 'ios'; }
+    if (a==null) return;
+    const h = rumoDaCamera(a, ev.beta, ev.gamma);
+    if (h!=null) return aplicarRumo(h, fonte);
+    const t = rumoDoTopo(a, ev.beta, ev.gamma);
+    if (t!=null) aplicarRumo(t, fonte+'-topo');
+  };
   const liga = () => {
-    window.addEventListener('deviceorientationabsolute', ev => {
-      if (ev.alpha!=null) aplicarRumo(360-ev.alpha, 'absolute');
-    }, true);
+    window.addEventListener('deviceorientationabsolute', ev => trata(ev, 'absolute'), true);
     window.addEventListener('deviceorientation', ev => {
-      if (ev.webkitCompassHeading!=null) aplicarRumo(ev.webkitCompassHeading, 'ios');
-      else if (ev.absolute && ev.alpha!=null) aplicarRumo(360-ev.alpha, 'absolute');
+      if (ev.webkitCompassHeading!=null || ev.absolute) trata(ev, 'absolute');
     }, true);
     setTimeout(()=>{ if (rumo==null){ e.textContent='Bússola indisponível'; e.className='pill medio'; } }, 3500);
   };
+  // Liga sempre: em boa parte dos Android os eventos chegam sem permissão.
+  // O botão fica como reforço para quando o navegador realmente exigir.
+  liga();
   if (precisaPedir){
-    e.textContent = 'Ativar bússola'; e.className = 'pill medio'; e.style.cursor='pointer';
+    e.textContent = 'Ativar bússola'; e.className = 'pill medio'; e.style.cursor = 'pointer';
     e.onclick = () => DeviceOrientationEvent.requestPermission()
-      .then(r => { if (r==='granted'){ e.onclick=null; e.style.cursor=''; liga(); } else { e.textContent='Bússola negada'; e.className='pill ruim'; } })
-      .catch(()=>{ e.textContent='Bússola negada'; e.className='pill ruim'; });
-  } else liga();
+      .then(r => {
+        if (r === 'granted'){ e.onclick = null; e.style.cursor = ''; liga(); }
+        else { e.textContent = 'Bússola negada'; e.className = 'pill ruim'; }
+      })
+      .catch(() => { e.textContent = 'Bússola negada'; e.className = 'pill ruim'; });
+  }
 }
 
 /* ---------- 6. Ranqueamento ---------- */
@@ -153,13 +198,18 @@ function ranquear(){
   if (!postes.length){ return; }
   if (!pos){ $('#candidatos').innerHTML = '<div class="vazio">Aguardando posição do GPS…</div>'; return; }
   const aqui = { lat:pos.coords.latitude, lon:pos.coords.longitude };
+  const acc = Math.max(3, pos.coords.accuracy || 10);
   const lista = postes.map(p => {
     const c = posteCoord(p);
     const d = distM(aqui, c);
     const az = azim(aqui, c);
     const dang = rumo==null ? 0 : difAng(az, rumo);
-    const score = d + (rumo==null ? 0 : cfg.k * dang);
-    return { p, d, az, dang, score };
+    // A direção até o poste só é confiável quando a distância supera o erro do
+    // GPS. Junto ao poste o azimute é ruído puro e não pode penalizar nada.
+    const r = 1.5 * acc;
+    const peso = d*d / (d*d + r*r);
+    const score = d + (rumo==null ? 0 : cfg.k * peso * dang);
+    return { p, d, az, dang, peso, score };
   });
   // postes já registrados são rebaixados: o próximo pendente sobe sozinho
   // quando o colaborador termina um poste e segue andando.
@@ -175,7 +225,9 @@ function pintarCandidatos(){
   const el = $('#candidatos');
   if (!candAtuais.length){ el.innerHTML = '<div class="vazio">Sem candidatos.</div>'; return; }
   const avisoRumo = rumo==null
-    ? '<div class="aviso" style="margin-bottom:8px">Sem bússola: ordenação apenas por distância. Confira o nº do poste antes de registrar.</div>' : '';
+    ? '<div class="aviso" style="margin-bottom:8px">Sem bússola: ordenação apenas por distância. Confira o nº do poste antes de registrar.</div>'
+    : rumoVelho()
+    ? '<div class="aviso" style="margin-bottom:8px">A bússola parou de atualizar — mexa no aparelho. A leitura abaixo pode estar velha.</div>' : '';
   el.innerHTML = avisoRumo + candAtuais.map((c,i) => {
     const p = c.p, r = regs[p.barramento];
     const feito = r && r.status!=='pendente';
@@ -188,6 +240,7 @@ function pintarCandidatos(){
     if (p.mt) tags.push('<span class="tag mt">MT</span>');
     if (p.ocupantes!=null) tags.push('<span class="tag ocup">'+p.ocupantes+' ocup. GEOSWEB</span>');
     if (p.irregularidades) tags.push('<span class="tag irr">irregularidade</span>');
+    if (p.novo) tags.push('<span class="tag irr">fora da base</span>');
     return '<button class="cand '+(i===0&&!feito?'top':'')+(feito?' feito':'')+'" data-barr="'+esc(p.barramento)+'" data-rank="'+(pos==null?'':pos)+'">'
       + '<div class="cand-l1"><span style="display:flex;align-items:baseline;gap:8px;min-width:0">'
       + '<span class="rank">'+(feito?'✓':pos)+'</span>'
@@ -195,7 +248,11 @@ function pintarCandidatos(){
       + (p.seq!=null?' <span style="font-size:12px;color:var(--neutro)">ID '+p.seq+'</span>':'')+'</span></span>'
       + '<span class="dist">'+c.d.toFixed(0)+' m</span></div>'
       + '<div class="cand-l2">'+(feito?'<span class="tag" style="background:#dff0e4;color:#14612f">já registrado</span>':'')
-      +(rumo!=null?'<span>desvio '+c.dang.toFixed(0)+'°</span>':'')+tags.join('')+'</div>'
+      +(rumo==null ? ''
+        : c.peso < 0.35
+          ? '<span class="tag" style="background:#e3f0fb;color:#17476e">você está junto · rumo ignorado</span>'
+          : '<span>desvio '+c.dang.toFixed(0)+'°</span>')
+      +tags.join('')+'</div>'
       + '</button>';
   }).join('');
   el.querySelectorAll('.cand').forEach(b => b.onclick = () => abrirCaptura(b.dataset.barr, b.dataset.rank ? Number(b.dataset.rank) : null));
@@ -319,7 +376,8 @@ async function processarFoto(file, poste, tipo){
 
 /* ---------- 9. Captura ---------- */
 function nomeFoto(p, tipo){
-  return limpaNome(cfg.os||'SEM-OS') + '_' + seq3(p.seq!=null?p.seq:0) + '_' + limpaNome(p.barramento) + '_' + tipo + '.jpg';
+  const id = p.seq!=null ? seq3(p.seq) : 'NOVO';
+  return limpaNome(cfg.os||'SEM-OS') + '_' + id + '_' + limpaNome(p.barramento) + '_' + tipo + '.jpg';
 }
 function abrirCaptura(barr, rank){
   const p = postes.find(x => x.barramento===barr); if (!p) return;
@@ -342,6 +400,9 @@ function pintarCaptura(p, r){
   const div = ref!=null && rascunho.ocup!==ref;
   const linhasMeta = [
     ['Nº do poste (barramento)', p.barramento],
+    p.novo ? ['Origem', 'CADASTRADO EM CAMPO'] : null,
+    p.novo && p.apos ? ['Entra após', p.apos] : null,
+    p.novo && p.gps_n ? ['Posição', p.gps_n>1 ? 'média de ' + p.gps_n + ' leituras' : 'leitura única do GPS'] : null,
     p.cod_id ? ['COD_ID BDGD', p.cod_id] : null,
     p.seq!=null ? ['ID no projeto', p.seq] : null,
     cand ? ['Distância', cand.d.toFixed(0)+' m'] : null,
@@ -375,6 +436,9 @@ function pintarCaptura(p, r){
     + '<textarea id="oObs" placeholder="Ex.: poste substituído, cabo em outro lado da via, acesso obstruído…">'+esc(rascunho.obs)+'</textarea>'
     + '</div>'
 
+    + (cand && rumo!=null && cand.d >= 20
+        ? '<button class="btn sec" id="btnCalib" style="margin-bottom:10px">Estou apontando para este poste — calibrar bússola</button>'
+        : '')
     + '<button class="btn" id="btnConfirmar" '+(temA&&temD?'':'disabled')+'>'
     + (temA&&temD ? 'Confirmar registro e seguir' : 'Faltam as duas fotos') + '</button>'
     + '<div class="linha-btn">'
@@ -388,6 +452,17 @@ function pintarCaptura(p, r){
   $('#oMenos').onclick = () => { rascunho.ocup = Math.max(0, rascunho.ocup-1); atualizarOcup(p); };
   $('#oMais').onclick  = () => { rascunho.ocup = Math.min(99, rascunho.ocup+1); atualizarOcup(p); };
   $('#oObs').oninput = e => rascunho.obs = e.target.value;
+  const cb = $('#btnCalib');
+  if (cb) cb.onclick = async () => {
+    const c2 = candAtuais.find(x => x.p.barramento===p.barramento);
+    if (!c2 || rumoCru==null) return toast('Sem leitura de bússola agora');
+    let off = ((c2.az - rumoCru + 540) % 360) - 180;   // -180..180
+    cfg.bussolaOff = Math.round(off);
+    await kvSet('cfg', cfg);
+    rumo = (rumoCru + cfg.bussolaOff + 360) % 360;
+    toast('Bússola calibrada: ' + (off>0?'+':'') + Math.round(off) + '°', 3500);
+    ranquear(); pintarCaptura(p, regs[p.barramento]);
+  };
   $('#btnConfirmar').onclick = () => salvarRegistro(p, 'auto');
   $('#btnNaoAchou').onclick = () => salvarRegistro(p, 'nao_encontrado');
   const ap = $('#btnApagarReg'); if (ap) ap.onclick = () => apagarRegistro(p.barramento);
@@ -473,6 +548,104 @@ async function apagarRegistro(b){
 function fecharModal(){ $('#modal').classList.remove('on'); abertoBarr=null; abertoRank=null; rascunho=null; }
 
 /* ---------- 10. Busca manual ---------- */
+/* Poste que existe em campo e não está no GEOSWEB. Não recebe ID_PONTO:
+   a numeração da rota pertence ao pipeline do dossiê. Fica marcado como NOVO
+   e ancorado "após" o poste da base mais próximo, para o projetista decidir. */
+let mediaPos = null;
+function abrirNovoPoste(){
+  if (!pos) return toast('Aguardando o GPS');
+  abertoBarr = null; abertoRank = null;
+  mediaPos = { soma_lat:0, soma_lon:0, peso:0, n:0 };
+  const nnovos = postes.filter(p => p.novo).length;
+  const sugerido = 'NOVO-' + String(nnovos+1).padStart(2,'0');
+  const perto = maisProximo();
+  $('#mTit').textContent = 'Poste fora da base';
+  $('#mCorpo').innerHTML =
+      '<div class="aviso">Use isto só para poste que <b>existe em campo e não consta do GEOSWEB</b>. '
+    + 'Ele não entra na numeração da rota — fica marcado para o projetista resolver o cadastro.</div>'
+    + '<label for="nBarr">Identificação provisória</label>'
+    + '<input type="text" id="nBarr" value="'+sugerido+'" autocomplete="off">'
+    + '<label>Posição</label>'
+    + '<div class="card" style="margin:0 0 10px"><div id="nPos" class="mini"></div>'
+    + '<button class="btn sec pequeno" id="nMedir" style="margin-top:8px;width:100%">Melhorar posição (10 s parado)</button></div>'
+    + '<label>Onde ele entra na rota</label>'
+    + '<div class="mini" id="nApos">'+(perto ? 'Logo após <b>'+esc(perto.p.barramento)+'</b> ('+perto.d.toFixed(0)+' m)' : 'Sem poste da base por perto')+'</div>'
+    + '<label for="nOcup">Ocupantes contados em campo</label>'
+    + '<input type="number" id="nOcup" value="0" min="0" max="99" inputmode="numeric">'
+    + '<label for="nObs">Observação</label>'
+    + '<textarea id="nObs" placeholder="Ex.: poste de concreto novo, sem plaqueta, entre os postes X e Y"></textarea>'
+    + '<button class="btn" id="nCriar" style="margin-top:12px">Criar e fotografar</button>';
+  $('#modal').classList.add('on');
+  pintarPosNovo();
+  $('#nMedir').onclick = medirPosicao;
+  $('#nCriar').onclick = criarNovoPoste;
+}
+function maisProximo(){
+  if (!pos || !postes.length) return null;
+  const aqui = { lat:pos.coords.latitude, lon:pos.coords.longitude };
+  let m = null;
+  postes.filter(p=>!p.novo).forEach(p => {
+    const d = distM(aqui, posteCoord(p));
+    if (!m || d < m.d) m = { p, d };
+  });
+  return m;
+}
+function posNovo(){
+  if (mediaPos && mediaPos.peso > 0)
+    return { lat: mediaPos.soma_lat/mediaPos.peso, lon: mediaPos.soma_lon/mediaPos.peso, n: mediaPos.n };
+  return pos ? { lat:pos.coords.latitude, lon:pos.coords.longitude, n:1 } : null;
+}
+function pintarPosNovo(){
+  const e = $('#nPos'); if (!e) return;
+  const p = posNovo();
+  e.innerHTML = p ? p.lat.toFixed(6)+', '+p.lon.toFixed(6)
+      + ' · ±'+(pos?Math.round(pos.coords.accuracy):'?')+' m'
+      + (p.n>1 ? ' · <b>média de '+p.n+' leituras</b>' : ' · leitura única') : 'sem GPS';
+}
+function medirPosicao(){
+  const b = $('#nMedir'); if (!b) return;
+  mediaPos = { soma_lat:0, soma_lon:0, peso:0, n:0 };
+  let resta = 10;
+  b.disabled = true;
+  const t = setInterval(() => {
+    if (pos){
+      const w = 1/Math.max(1, Math.pow(pos.coords.accuracy||10, 2));
+      mediaPos.soma_lat += pos.coords.latitude*w;
+      mediaPos.soma_lon += pos.coords.longitude*w;
+      mediaPos.peso += w; mediaPos.n++;
+    }
+    resta--; b.textContent = 'Medindo… ' + resta + ' s';
+    pintarPosNovo();
+    if (resta<=0){ clearInterval(t); b.disabled=false; b.textContent='Melhorar posição (10 s parado)';
+      toast('Posição medida com '+mediaPos.n+' leituras'); }
+  }, 1000);
+}
+async function criarNovoPoste(){
+  const p0 = posNovo(); if (!p0) return toast('Sem GPS');
+  const barr = ($('#nBarr').value || '').trim() || ('NOVO-' + Date.now());
+  if (postes.some(x => String(x.barramento).toUpperCase() === barr.toUpperCase()))
+    return toast('Já existe um poste com essa identificação');
+  const perto = maisProximo();
+  const novo = {
+    seq: null, barramento: barr, cod_id: '',
+    lat: p0.lat, lon: p0.lon,
+    altura:'', esforco:'', material:'', estrutura:'', bt:false, mt:false,
+    ocupantes: null, irregularidades:'', logradouro:'',
+    novo: true, origem: 'campo',
+    apos: perto ? perto.p.barramento : '',
+    gps_n: p0.n, gps_precisao: pos ? Math.round(pos.coords.accuracy) : null,
+    criado_em: agora()
+  };
+  postes.push(novo);
+  await kvSet('postes', postes);
+  const oc = parseInt($('#nOcup').value, 10) || 0;
+  const obs = $('#nObs').value || '';
+  pintarBase(); pintarLista(); pintarProgresso(); ranquear();
+  abrirCaptura(barr, null);
+  rascunho.ocup = oc; rascunho.obs = obs;
+  pintarCaptura(novo, null);
+  toast('Poste criado — agora as duas fotos');
+}
 function abrirBusca(){
   abertoBarr=null; abertoRank=null;
   $('#mTit').textContent = 'Buscar poste';
@@ -750,14 +923,15 @@ function zip(arquivos){ // [{nome, dados:Uint8Array}]
 
 /* ---------- 14. Exportação ---------- */
 function csvInventario(){
-  const cab = ['ID','BARRAMENTO','COD_ID','LAT_BASE','LON_BASE','STATUS','OCUP_GEOSWEB','OCUP_CAMPO',
+  const cab = ['ID','BARRAMENTO','COD_ID','ORIGEM','ENTRA_APOS','LAT_BASE','LON_BASE','STATUS','OCUP_GEOSWEB','OCUP_CAMPO',
     'DIVERGENCIA','FOTO_ABERTA','FOTO_DETALHE','NITIDEZ_A','NITIDEZ_D','AZIMUTE_A','LAT_GPS','LON_GPS',
-    'PRECISAO_GPS_M','RANKING','DIST_M','DESVIO_RUMO','DATA_HORA','OBS'];
+    'PRECISAO_GPS_M','RANKING','DIST_M','DESVIO_RUMO','BUSSOLA_OFF','DATA_HORA','OBS'];
   const lin = postes.map(p => {
     const r = regs[p.barramento] || {};
     const div = r.ocupantes_campo!=null && p.ocupantes!=null && r.ocupantes_campo!==p.ocupantes;
     return [
       p.seq!=null?p.seq:'', p.barramento, p.cod_id||'',
+      p.novo?'CAMPO':'GEOSWEB', p.novo?(p.apos||''):'',
       virg(p.lat,7), virg(p.lon,7),
       r.status || 'pendente',
       p.ocupantes!=null?p.ocupantes:'', r.ocupantes_campo!=null?r.ocupantes_campo:'',
@@ -769,6 +943,7 @@ function csvInventario(){
       r.gps_precisao!=null?r.gps_precisao:'',
       r.ranking!=null?r.ranking:(r.ranking_busca?'busca':''),
       r.dist_m!=null?virg(r.dist_m,1):'', r.desvio_rumo!=null?r.desvio_rumo:'',
+      cfg.bussolaOff||0,
       r.quando||'', (r.obs||'').replace(/[;\r\n]/g,' ')
     ].join(';');
   });
@@ -815,7 +990,10 @@ async function gerarZip(){
     + 'fotos/      pares por poste, no padrão <OS>_<ID>_<BARRAMENTO>_A|D.jpg\r\n'
     + '            A = foto aberta do poste inteiro; D = detalhe da ocupação.\r\n'
     + '            Cada foto traz tarja com poste, OS, data/hora, coordenada e azimute.\r\n'
-    + 'inventario.csv   uma linha por poste do pacote (ponto-e-vírgula, vírgula decimal).\r\n'
+    + 'inventario.csv   uma linha por poste do pacote (ponto-e-virgula, virgula decimal).\r\n'
+    + '            ORIGEM=CAMPO marca poste que existe em campo e NAO consta do GEOSWEB:\r\n'
+    + '            sem ID_PONTO, ancorado em ENTRA_APOS, pendente de cadastro na concessionaria.\r\n'
+    + '            BUSSOLA_OFF = correcao de bussola aplicada no aparelho, em graus.\r\n'
     + 'ranking.csv      telemetria de identificacao: em que posicao da lista estava o poste confirmado.\r\n'
     + '            Postes ja registrados sao rebaixados no ranking, para o proximo pendente subir\r\n'
     + '            sozinho; a posicao medida e, portanto, entre os postes ainda pendentes.\r\n'
@@ -832,9 +1010,10 @@ function pintarExport(){
   const dv = v.filter(r=>r.status==='divergente').length;
   const ne = v.filter(r=>r.status==='nao_encontrado').length;
   const borradas = v.filter(r => (r.metaA && !r.metaA.nitido) || (r.metaD && !r.metaD.nitido)).length;
+  const nv = postes.filter(p=>p.novo).length;
   $('#kpis').innerHTML = [
     [t,'postes'],[ok,'conformes'],[dv,'divergentes'],[ne,'não achados'],
-    [t-(ok+dv+ne),'pendentes'],[borradas,'fotos borradas']
+    [t-(ok+dv+ne),'pendentes'],[borradas,'fotos borradas'],[nv,'fora da base']
   ].map(k => '<div class="kpi"><b>'+k[0]+'</b><span>'+k[1]+'</span></div>').join('');
 
   const feitos = v.filter(r=>r.status!=='pendente');
@@ -849,10 +1028,14 @@ function pintarExport(){
       .map(r => '<tr><td>'+r[0]+'</td><td class="n">'+r[1]+'</td><td class="n">'+pc(r[1])+'</td></tr>').join('')
     + '<tr><td><b>Acerto no topo</b></td><td class="n"><b>'+c1+'/'+feitos.length+'</b></td><td class="n"><b>'+pc(c1)+'</b></td></tr>';
 
+  const novos = postes.filter(p=>p.novo).map(p =>
+    '<div class="aviso"><b>'+esc(p.barramento)+'</b> — poste em campo fora do GEOSWEB'
+    + (p.apos?', logo após '+esc(p.apos):'')
+    + '. Precisa de cadastro na concessionária antes de entrar na rota.</div>').join('');
   const divs = v.filter(r => r.status==='divergente' || r.status==='nao_encontrado'
     || (r.metaA&&!r.metaA.nitido) || (r.metaD&&!r.metaD.nitido));
-  $('#listaDiv').innerHTML = !divs.length
-    ? '<div class="aviso ok">Nenhuma divergência registrada.</div>'
+  $('#listaDiv').innerHTML = novos + (!divs.length
+    ? ''
     : divs.map(r => {
         const mot = [];
         if (r.status==='divergente') mot.push('ocupantes: GEOSWEB '+r.ocupantes_geosweb+' × campo '+r.ocupantes_campo);
@@ -861,7 +1044,8 @@ function pintarExport(){
         if (r.metaD&&!r.metaD.nitido) mot.push('foto de detalhe possivelmente borrada');
         if (r.obs) mot.push('obs.: '+r.obs);
         return '<div class="aviso'+(r.status==='nao_encontrado'?' erro':'')+'"><b>'+esc(r.barramento)+'</b><br>'+esc(mot.join(' · '))+'</div>';
-      }).join('');
+      }).join(''));
+  if (!novos && !divs.length) $('#listaDiv').innerHTML = '<div class="aviso ok">Nenhuma divergência registrada.</div>';
 }
 
 /* ---------- 15. Configuração e início ---------- */
@@ -869,6 +1053,7 @@ function pintarCfg(){
   $('#fOs').value = cfg.os||''; $('#fProj').value = cfg.projeto||''; $('#fMun').value = cfg.municipio||'';
   $('#fOE').value = cfg.offE; $('#fON').value = cfg.offN; $('#fK').value = cfg.k;
   $('#fNit').value = cfg.nitidez; $('#fPx').value = cfg.maxPx;
+  $('#fBus').value = cfg.bussolaOff || 0;
 }
 async function pintarArmazenamento(){
   const el = $('#infoArm');
@@ -903,6 +1088,7 @@ async function iniciar(){
   $('#mFechar').onclick = fecharModal;
   $('#modal').onclick = e => { if (e.target.id==='modal') fecharModal(); };
   $('#btnBuscar').onclick = abrirBusca;
+  $('#btnNovoPoste').onclick = abrirNovoPoste;
   $('#camA').onchange = () => receberFoto($('#camA'),'A');
   $('#camD').onchange = () => receberFoto($('#camD'),'D');
   $('#btnImportar').onclick = () => $('#fBase').click();
@@ -934,6 +1120,7 @@ async function iniciar(){
     cfg.offE = num($('#fOE').value,0); cfg.offN = num($('#fON').value,0);
     cfg.k = num($('#fK').value,0.35); cfg.nitidez = num($('#fNit').value,60);
     cfg.maxPx = Math.max(600, num($('#fPx').value,1600)|0);
+    cfg.bussolaOff = Math.round(num($('#fBus').value,0));
     await kvSet('cfg', cfg); ranquear(); toast('Calibração salva');
   };
   $('#btnAtualizar').onclick = async () => {
