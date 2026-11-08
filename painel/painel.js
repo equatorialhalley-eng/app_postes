@@ -1,9 +1,9 @@
-/* Painel do Projetista — v0.1
+/* Painel do Projetista — v0.2
    Entrada: Planilha Detalhada do GEOSWEB + recorte do município (BDGD).
    Saída: pacote do app de campo, KMZ inicial de backup, e — na volta —
    as três listas que o projetista precisa executar no GEOSWEB. */
 'use strict';
-const VERSAO = 'v0.2';
+const VERSAO = 'v0.3';
 
 /* ---------- utilidades ---------- */
 const $ = s => document.querySelector(s);
@@ -519,6 +519,90 @@ function pintarRetorno(inv){
     + (!excluir.length && !incluir.length && !cadastrar.length && !pendentes.length
         ? '<div class="aviso ok">A rota saiu do campo igual à seleção do GEOSWEB. Nada a ajustar na plataforma.</div>' : '');
 }
+/* ---------- roteiro de upload ao GEOSWEB ----------
+   Não reduz o número de envios — o GEOSWEB é um a um. Serve para não perder
+   o lugar num lote de centenas: o risco real é subir duas vezes o mesmo poste
+   ou pular um e descobrir quando a concessionária devolver.
+   A marcação fica no navegador, por OS, e sobrevive a fechar a aba. */
+function chaveRoteiro(){ return 'roteiro_' + ((retorno.cfg && retorno.cfg.os) || 'sem-os'); }
+function lerFeitos(){
+  try { return new Set(JSON.parse(localStorage.getItem(chaveRoteiro()) || '[]')); }
+  catch(e){ return new Set(); }
+}
+function gravarFeitos(s){
+  try { localStorage.setItem(chaveRoteiro(), JSON.stringify(Array.from(s))); }
+  catch(e){ /* navegador sem armazenamento: o roteiro ainda funciona na sessão */ }
+}
+function nomeFotoExport(p, tipo){
+  const os = (retorno.cfg && retorno.cfg.os) || 'SEM-OS';
+  const id = p.seq != null ? String(p.seq).padStart(3,'0') : '000';
+  return (os + '_' + id + '_' + p.barramento + '_' + tipo + '.jpg')
+    .replace(/[^A-Za-z0-9._-]/g,'_').replace(/_+/g,'_');
+}
+function itensRoteiro(){
+  const ps = retorno.postes || [], rg = retorno.registros || {};
+  // Só sobe foto de poste que existe no GEOSWEB. O não cadastrado vai ao
+  // ANEXO B e não tem onde receber imagem.
+  return ps.filter(p => {
+    const r = rg[p.barramento] || {};
+    return ['ok','divergente'].includes(r.status) && !p.novo;
+  }).sort((a,b) => (a.seq||0) - (b.seq||0));
+}
+function pintarRoteiro(){
+  const itens = itensRoteiro();
+  const alvo = $('#roteiro');
+  if (!itens.length){ alvo.innerHTML = '<div class="vazio">Nenhum poste validado para subir foto.</div>'; return; }
+  const feitos = lerFeitos();
+  const rg = retorno.registros || {};
+  const bloq = itens.filter(p => p.origem==='BDGD_FORA_DA_OS').length;
+  const n = itens.filter(p => feitos.has(p.barramento)).length;
+  alvo.innerHTML =
+      (bloq ? '<div class="aviso">'+bloq+' poste(s) marcados <b>INCLUIR</b> ainda não estão na OS. '
+            + 'O GEOSWEB só abre o campo de foto depois de selecionar — faça as inclusões antes de começar.</div>' : '')
+    + '<div class="aviso ok" id="rProg"><b>'+n+' de '+itens.length+'</b> enviados · '
+    + 'a marcação fica guardada neste navegador, por OS</div>'
+    + '<div class="rolagem"><table id="tRoteiro"><tr><th></th><th>ID</th><th>Nº do poste</th>'
+    + '<th>arquivos das fotos</th><th></th></tr>'
+    + itens.map(p => {
+        const r = rg[p.barramento] || {};
+        const ok = feitos.has(p.barramento);
+        const fora = p.origem === 'BDGD_FORA_DA_OS';
+        return '<tr data-b="'+esc(p.barramento)+'"'+(ok?' style="opacity:.5"':'')+'>'
+          + '<td><input type="checkbox" data-b="'+esc(p.barramento)+'"'+(ok?' checked':'')+'></td>'
+          + '<td class="n">'+(p.seq||'')+'</td>'
+          + '<td class="barr">'+esc(p.barramento)
+          + (fora ? ' <span class="tag al">incluir antes</span>' : '') + '</td>'
+          + '<td class="mini">'+esc([r.fotoA?nomeFotoExport(p,'A'):'', r.fotoD?nomeFotoExport(p,'D'):'']
+              .filter(Boolean).join('  ·  ') || '—')+'</td>'
+          + '<td><button class="btn sec pequeno" data-copiar="'+esc(p.barramento)+'" '
+          + 'style="padding:3px 9px;font-size:11.5px;min-height:0">copiar nº</button></td></tr>';
+      }).join('')
+    + '</table></div>';
+
+  alvo.querySelectorAll('input[type=checkbox]').forEach(c => c.onchange = () => {
+    const f = lerFeitos();
+    if (c.checked) f.add(c.dataset.b); else f.delete(c.dataset.b);
+    gravarFeitos(f); pintarRoteiro();
+  });
+  alvo.querySelectorAll('[data-copiar]').forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copiar); toast('Copiado: ' + b.dataset.copiar, 1600); }
+    catch(e){ toast('O navegador recusou a cópia — selecione o número à mão'); }
+  });
+}
+function csvRoteiro(){
+  const feitos = lerFeitos();
+  const rg = retorno.registros || {};
+  const lin = [['ID_PONTO','BARRAMENTO','SITUACAO','FOTO_ABERTA','FOTO_DETALHE','JA_ENVIADO'].join(';')];
+  itensRoteiro().forEach(p => {
+    const r = rg[p.barramento] || {};
+    lin.push([p.seq||'', p.barramento,
+      p.origem==='BDGD_FORA_DA_OS' ? 'INCLUIR NA OS ANTES' : 'na OS',
+      r.fotoA?nomeFotoExport(p,'A'):'', r.fotoD?nomeFotoExport(p,'D'):'',
+      feitos.has(p.barramento)?'SIM':'NAO'].join(';'));
+  });
+  return '\uFEFF' + lin.join('\r\n') + '\r\n';
+}
+
 function csvRelatorio(){
   const inv = retorno, ps = inv.postes||[], rg = inv.registros||{};
   const st = b => (rg[b]||{}).status || 'pendente';
@@ -606,9 +690,17 @@ window.addEventListener('DOMContentLoaded', () => {
       const inv = await lerZip(f);
       marcar('#sZip', f.name, (inv.postes||[]).length + ' postes · pacote de ' + esc(inv.gerado_em||'—'));
       pintarRetorno(inv);
+      pintarRoteiro();
       if (inv.cfg && inv.cfg.os) $('#hdrOs').textContent = 'OS ' + inv.cfg.os;
     }catch(e){ console.error(e); toast('Falha: ' + e.message, 6000); }
   });
+  $('#btnRoteiroCsv').onclick = () => baixar(
+    new Blob([csvRoteiro()], {type:'text/csv;charset=utf-8'}),
+    ((retorno.cfg&&retorno.cfg.os) || 'OS') + '_ROTEIRO_UPLOAD.csv');
+  $('#btnRoteiroZerar').onclick = () => {
+    if (!confirm('Desmarcar todos os postes já enviados deste roteiro?')) return;
+    gravarFeitos(new Set()); pintarRoteiro();
+  };
   $('#btnRelProj').onclick = () => baixar(
     new Blob([csvRelatorio()], {type:'text/csv;charset=utf-8'}),
     (retorno.cfg&&retorno.cfg.os ? retorno.cfg.os : 'OS') + '_AJUSTES_GEOSWEB.csv');
